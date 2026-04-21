@@ -1,0 +1,446 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────
+
+/// บทบาทของผู้ใช้งานในระบบ
+enum UserRole {
+  SUPER_ADMIN      // ผู้ดูแลระบบสูงสุด — เข้าถึงได้ทุกอย่าง
+  SUPPORT_ADMIN    // ผู้ดูแลทีม Support — จัดการ Master Data และ Ticket ทั้งหมด
+  SUPPORT_AGENT    // เจ้าหน้าที่ Support — รับผิดชอบ Ticket ที่ได้รับมอบหมาย
+  CUSTOMER_ADMIN   // ผู้ดูแลฝั่งลูกค้า — จัดการ User และดู Ticket ของบริษัทตัวเอง
+  CUSTOMER_USER    // ผู้ใช้งานทั่วไปฝั่งลูกค้า — สร้างและดู Ticket ของตัวเอง
+}
+
+/// สถานะของ Ticket ตลอด Lifecycle
+enum TicketStatus {
+  OPEN             // ลูกค้าเพิ่งแจ้ง ยังไม่ได้รับการตรวจสอบ
+  TRIAGED          // ทีม Support ตรวจสอบเบื้องต้นแล้ว
+  IN_PROGRESS      // กำลังดำเนินการแก้ไข
+  WAITING_CUSTOMER // รอข้อมูลเพิ่มเติมจากลูกค้า (SLA หยุดนับ)
+  WAITING_INTERNAL // รอทีมภายใน / Dev / Vendor (SLA หยุดนับ)
+  RESOLVED         // แก้ไขเสร็จแล้ว รอลูกค้ายืนยัน
+  CLOSED           // ปิดงานแล้ว (สิ้นสุด Lifecycle)
+  REOPENED         // เปิดใหม่หลังจาก RESOLVED หรือ CLOSED
+  CANCELLED        // ยกเลิก Ticket
+}
+
+/// ระดับความสำคัญของ Ticket
+enum TicketPriority {
+  LOW      // ต่ำ — 2 วันทำการ / 7 วันทำการ
+  MEDIUM   // ปานกลาง — 1 วันทำการ / 3 วันทำการ
+  HIGH     // สูง — 4 ชั่วโมง / 8 ชั่วโมง
+  CRITICAL // วิกฤต — 1 ชั่วโมง / 4 ชั่วโมง (24/7)
+}
+
+/// ประเภท Comment ใน Ticket
+enum CommentType {
+  PUBLIC   // ลูกค้าและทีม Support เห็นได้
+  INTERNAL // เห็นเฉพาะทีม Support เท่านั้น (Internal Note)
+}
+
+/// ช่องทางการแจ้งเตือน
+enum NotificationChannel {
+  EMAIL  // อีเมล
+  IN_APP // แจ้งเตือนในแอปพลิเคชัน
+  LINE   // LINE OA — เตรียมไว้สำหรับ Phase 2
+}
+
+/// ประเภทการกระทำที่บันทึกใน Audit Log
+enum AuditAction {
+  TICKET_CREATED   // สร้าง Ticket ใหม่
+  STATUS_CHANGED   // เปลี่ยนสถานะ Ticket
+  ASSIGNEE_CHANGED // เปลี่ยนผู้รับผิดชอบ
+  TEAM_CHANGED     // เปลี่ยนทีมที่รับผิดชอบ
+  PRIORITY_CHANGED // เปลี่ยนระดับความสำคัญ
+  COMMENT_ADDED    // เพิ่ม Comment
+  ATTACHMENT_ADDED // แนบไฟล์
+  SLA_BREACHED     // SLA เกินกำหนด
+  TICKET_REOPENED  // เปิด Ticket ใหม่อีกครั้ง
+  TICKET_CLOSED    // ปิด Ticket
+}
+
+/// ขอบเขตของ Ticket ตาม MA Contract
+enum ScopeType {
+  IN_SCOPE  // อยู่ในขอบเขต MA Contract
+  OUT_SCOPE // นอกขอบเขต MA Contract (งานนอก)
+}
+
+// ─────────────────────────────────────
+// CUSTOMER & ORGANIZATION
+// ─────────────────────────────────────
+
+/// บริษัทลูกค้า — หน่วยองค์กรหลักของระบบ
+/// 1 Customer มีได้หลาย System และหลาย Contract
+model Customer {
+  id        String    @id @default(cuid())
+  name      String    /// ชื่อบริษัทลูกค้า
+  code      String    @unique /// รหัสลูกค้า เช่น CUST-001
+  email     String?   /// อีเมลติดต่อ
+  phone     String?   /// เบอร์โทรศัพท์
+  address   String?   /// ที่อยู่
+  isActive  Boolean   @default(true) /// สถานะการใช้งาน
+  deletedAt DateTime? /// Soft delete — ไม่ลบจริง
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  users     User[]
+  systems   CustomerSystem[]
+  contracts Contract[]
+  tickets   Ticket[]
+
+  @@map("customers")
+}
+
+/// ทีม Support ภายในองค์กร
+/// ใช้สำหรับจัดกลุ่ม Support Agent และมอบหมาย Ticket ระดับทีม
+model Team {
+  id          String    @id @default(cuid())
+  name        String    /// ชื่อทีม เช่น "Frontend Team", "Backend Team"
+  description String?   /// คำอธิบายทีม
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  members User[]
+  tickets Ticket[]
+
+  @@map("teams")
+}
+
+/// ผู้ใช้งานในระบบ ทั้งฝั่ง Support และฝั่งลูกค้า
+/// customerId จะมีค่าเฉพาะ CUSTOMER_* roles
+/// teamId จะมีค่าเฉพาะ SUPPORT_AGENT
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  password    String    /// bcrypt hashed — ไม่เก็บ plain text
+  firstName   String    /// ชื่อจริง
+  lastName    String    /// นามสกุล
+  phone       String?
+  role        UserRole
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime? /// Soft delete
+  lastLoginAt DateTime? /// เวลา Login ล่าสุด
+  lineUserId  String?   /// LINE User ID — เตรียมไว้สำหรับ Phase 2
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  /// FK สำหรับ Customer User — null ถ้าเป็น Support/Admin
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  /// FK สำหรับ Support Agent — null ถ้าเป็น Customer
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id])
+
+  createdTickets    Ticket[]                @relation("TicketCreator")
+  assignedTickets   Ticket[]                @relation("TicketAssignee")
+  comments          Comment[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+  notificationPrefs NotificationPreference[]
+
+  @@map("users")
+}
+
+/// Refresh Token สำหรับ JWT Token Rotation
+/// เมื่อ refresh แต่ละครั้งจะ revoke token เดิมและออก token ใหม่
+model RefreshToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  expiresAt DateTime  /// วันหมดอายุ
+  createdAt DateTime  @default(now())
+  revokedAt DateTime? /// null = ยังใช้งานได้, มีค่า = ถูก revoke แล้ว
+
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────
+// CUSTOMER SYSTEMS & CONTRACT
+// ─────────────────────────────────────
+
+/// ระบบ (Software) ที่อยู่ภายใต้ดูแลของลูกค้า
+/// 1 Customer มีได้หลาย System, แต่ละ System มี MA Contract และ Category ของตัวเอง
+model CustomerSystem {
+  id          String    @id @default(cuid())
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id])
+  name        String    /// ชื่อระบบ เช่น "Booking System", "HR System"
+  code        String    /// รหัสระบบ เช่น "SYS-BK-001"
+  description String?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contracts  Contract[]
+  categories Category[]
+  tickets    Ticket[]
+
+  @@unique([customerId, code]) /// code ต้อง unique ภายใน customer เดียวกัน
+  @@map("customer_systems")
+}
+
+/// สัญญา MA (Maintenance Agreement) ระหว่างบริษัทกับลูกค้า
+/// 1 Contract ครอบคลุม 1 System, มี SLA Policy และ Category Scope กำหนดไว้
+model Contract {
+  id             String         @id @default(cuid())
+  customerId     String
+  customer       Customer       @relation(fields: [customerId], references: [id])
+  systemId       String
+  system         CustomerSystem @relation(fields: [systemId], references: [id])
+  contractNumber String         @unique /// เลขที่สัญญา
+  name           String         /// ชื่อสัญญา
+  startDate      DateTime       /// วันเริ่มต้นสัญญา
+  endDate        DateTime       /// วันสิ้นสุดสัญญา
+  isActive       Boolean        @default(true)
+  renewedFromId  String?        /// อ้างอิงสัญญาเดิมเมื่อมีการต่ออายุ
+  renewedFrom    Contract?      @relation("ContractRenewal", fields: [renewedFromId], references: [id])
+  renewals       Contract[]     @relation("ContractRenewal")
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  categoryScopes ContractCategoryScope[]
+  slaPolicies    SlaPolicy[]
+
+  @@map("contracts")
+}
+
+/// หมวดหมู่ Ticket ของแต่ละ System
+/// รองรับ Parent-Child tree เพื่อแบ่ง Sub-category
+/// เช่น "Bug" → "Frontend Bug", "Backend Bug"
+model Category {
+  id          String         @id @default(cuid())
+  systemId    String
+  system      CustomerSystem @relation(fields: [systemId], references: [id])
+  name        String         /// ชื่อหมวดหมู่ เช่น "Bug", "Change Request"
+  description String?
+  parentId    String?        /// null = หมวดหมู่หลัก, มีค่า = Sub-category
+  parent      Category?      @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[]     @relation("CategoryTree")
+  isActive    Boolean        @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  contractScopes ContractCategoryScope[]
+  tickets        Ticket[]
+
+  @@map("categories")
+}
+
+/// ความสัมพันธ์ระหว่าง Contract และ Category
+/// กำหนดว่า Category นี้อยู่ใน Scope ของ Contract หรือไม่
+model ContractCategoryScope {
+  id         String    @id @default(cuid())
+  contractId String
+  contract   Contract  @relation(fields: [contractId], references: [id])
+  categoryId String
+  category   Category  @relation(fields: [categoryId], references: [id])
+  scopeType  ScopeType @default(IN_SCOPE) /// IN_SCOPE = อยู่ใน MA, OUT_SCOPE = งานนอก
+  isActive   Boolean   @default(true)
+
+  @@unique([contractId, categoryId])
+  @@map("contract_category_scopes")
+}
+
+// ─────────────────────────────────────
+// TICKET
+// ─────────────────────────────────────
+
+/// Ticket หลักของระบบ — บันทึกการแจ้งปัญหาหรือขอความช่วยเหลือ
+/// ผูกกับ Customer, System, Category และ Contract ที่ active อยู่
+model Ticket {
+  id           String         @id @default(cuid())
+  ticketNumber String         @unique /// รหัส Ticket รูปแบบ TKT-YYYY-XXXXX
+  title        String         /// หัวข้อปัญหา
+  description  String         /// รายละเอียดปัญหา
+  status       TicketStatus   @default(OPEN)
+  priority     TicketPriority @default(MEDIUM)
+  scopeType    ScopeType?     /// ประเมินตอนรับเรื่องว่า IN_SCOPE หรือ OUT_SCOPE
+
+  customerId String
+  customer   Customer       @relation(fields: [customerId], references: [id])
+  systemId   String
+  system     CustomerSystem @relation(fields: [systemId], references: [id])
+  categoryId String?        /// optional — ลูกค้าอาจยังไม่รู้ category ตอนสร้าง
+  category   Category?      @relation(fields: [categoryId], references: [id])
+
+  createdById String         /// ผู้สร้าง Ticket
+  createdBy   User           @relation("TicketCreator", fields: [createdById], references: [id])
+
+  assigneeId String?         /// Support Agent ที่รับผิดชอบ
+  assignee   User?           @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  teamId String?             /// ทีมที่รับผิดชอบ
+  team   Team?               @relation(fields: [teamId], references: [id])
+
+  firstResponseAt DateTime?  /// เวลาที่ตอบกลับลูกค้าครั้งแรก (ใช้คำนวณ SLA)
+  resolvedAt      DateTime?  /// เวลาที่ Support แจ้งว่าแก้ไขแล้ว
+  closedAt        DateTime?  /// เวลาที่ปิด Ticket
+  deletedAt       DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  followUpFromId String?     /// อ้างอิง Ticket เดิมเมื่อ Reopen จาก CLOSED
+
+  comments    Comment[]
+  attachments Attachment[]
+  auditLogs   AuditLog[]
+  slaTracking SlaTracking?
+
+  @@map("tickets")
+}
+
+/// Comment ใน Ticket — แบ่งเป็น PUBLIC (ลูกค้าเห็น) และ INTERNAL (Support เท่านั้น)
+model Comment {
+  id        String      @id @default(cuid())
+  ticketId  String
+  ticket    Ticket      @relation(fields: [ticketId], references: [id])
+  authorId  String
+  author    User        @relation(fields: [authorId], references: [id])
+  content   String
+  type      CommentType @default(PUBLIC)
+  deletedAt DateTime?   /// Soft delete
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  attachments Attachment[]
+
+  @@map("comments")
+}
+
+/// ไฟล์แนบของ Ticket หรือ Comment
+/// ไฟล์จริงเก็บที่ S3/MinIO — ดึงผ่าน Presigned URL เท่านั้น
+model Attachment {
+  id           String   @id @default(cuid())
+  ticketId     String
+  ticket       Ticket   @relation(fields: [ticketId], references: [id])
+  commentId    String?  /// null = แนบกับ Ticket โดยตรง, มีค่า = แนบกับ Comment
+  comment      Comment? @relation(fields: [commentId], references: [id])
+  uploadedById String   /// รหัส User ที่อัปโหลด
+  fileName     String   /// ชื่อไฟล์ต้นฉบับ
+  fileSize     Int      /// ขนาดไฟล์ (bytes)
+  mimeType     String   /// ประเภทไฟล์ เช่น image/png, application/pdf
+  storageKey   String   /// Object key ใน S3/MinIO
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@map("attachments")
+}
+
+// ─────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────
+
+/// บันทึกการกระทำทุกอย่างที่เกิดขึ้นกับ Ticket
+/// actorId = null หมายถึง System Action (เช่น SLA breach โดย cron job)
+model AuditLog {
+  id        String      @id @default(cuid())
+  ticketId  String
+  ticket    Ticket      @relation(fields: [ticketId], references: [id])
+  actorId   String?     /// null = system action
+  actor     User?       @relation(fields: [actorId], references: [id])
+  action    AuditAction
+  fromValue String?     /// ค่าเดิมก่อนเปลี่ยน เช่น "OPEN"
+  toValue   String?     /// ค่าใหม่หลังเปลี่ยน เช่น "IN_PROGRESS"
+  metadata  Json?       /// ข้อมูลเพิ่มเติม เช่น comment preview, filename
+  createdAt DateTime    @default(now())
+
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────
+// SLA
+// ─────────────────────────────────────
+
+/// นโยบาย SLA ของแต่ละ Contract แบ่งตาม Priority
+/// แต่ละ Contract กำหนด SLA เองได้อิสระ ไม่ขึ้นกับ Contract อื่น
+model SlaPolicy {
+  id                   String         @id @default(cuid())
+  contractId           String
+  contract             Contract       @relation(fields: [contractId], references: [id])
+  priority             TicketPriority
+  firstResponseMinutes Int            /// เวลาตอบสนองครั้งแรก (นาที)
+  resolutionMinutes    Int            /// เวลาปิดงาน (นาที)
+  businessHoursOnly    Boolean        @default(true) /// true = นับเฉพาะเวลาทำการ
+  isActive             Boolean        @default(true)
+
+  @@unique([contractId, priority])
+  @@map("sla_policies")
+}
+
+/// ติดตามสถานะ SLA ของแต่ละ Ticket แบบ Real-time
+/// รองรับการ Pause/Resume clock เมื่อ Ticket อยู่ในสถานะ WAITING_*
+model SlaTracking {
+  id       String @id @default(cuid())
+  ticketId String @unique
+  ticket   Ticket @relation(fields: [ticketId], references: [id])
+
+  firstResponseDue        DateTime? /// กำหนดการตอบสนองครั้งแรก
+  firstResponseAt         DateTime? /// เวลาที่ตอบสนองจริง
+  isFirstResponseBreached Boolean   @default(false) /// true = SLA ตอบสนองเกินกำหนด
+
+  resolutionDue        DateTime? /// กำหนดการปิดงาน
+  resolutionAt         DateTime? /// เวลาที่ปิดงานจริง
+  isResolutionBreached Boolean   @default(false) /// true = SLA ปิดงานเกินกำหนด
+
+  pausedAt           DateTime? /// เวลาที่ Pause clock ล่าสุด (null = กำลังนับ)
+  totalPausedMinutes Int       @default(0) /// รวมเวลาทั้งหมดที่ถูก Pause (นาที)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("sla_tracking")
+}
+
+// ─────────────────────────────────────
+// NOTIFICATION
+// ─────────────────────────────────────
+
+/// การตั้งค่าการแจ้งเตือนของแต่ละ User
+/// กำหนดว่า User ต้องการรับแจ้งเตือน Event ใด ผ่านช่องทางใด
+model NotificationPreference {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id])
+  channel   NotificationChannel
+  event     String              /// เช่น "ticket.created", "status_changed", "sla.breached"
+  isEnabled Boolean             @default(true)
+
+  @@unique([userId, channel, event])
+  @@map("notification_preferences")
+}
+
+/// Inbox การแจ้งเตือนของ User แต่ละคน
+/// ใช้สำหรับ In-App notification และ tracking ว่าอ่านแล้วหรือยัง
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String              /// ผู้รับการแจ้งเตือน
+  title     String              /// หัวข้อการแจ้งเตือน
+  body      String              /// เนื้อหา
+  channel   NotificationChannel
+  event     String
+  isRead    Boolean             @default(false)
+  metadata  Json?               /// ข้อมูลเพิ่มเติม เช่น ticketId, ticketNumber
+  sentAt    DateTime?           /// เวลาที่ส่งแจ้งเตือน
+  readAt    DateTime?           /// เวลาที่อ่าน
+  createdAt DateTime            @default(now())
+
+  @@map("notifications")
+}

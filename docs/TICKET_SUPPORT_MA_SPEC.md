@@ -1,0 +1,1302 @@
+# Ticket Support MA System — Development Specification
+> Version: 1.0 | Phase: 1 (Web Application)
+> Stack: Next.js + NestJS + PostgreSQL + Prisma
+
+---
+
+## 📋 Table of Contents
+
+1. [System Overview](#1-system-overview)
+2. [Tech Stack](#2-tech-stack)
+3. [Project Structure](#3-project-structure)
+4. [Database Schema (Prisma)](#4-database-schema-prisma)
+5. [Role & Permission Matrix](#5-role--permission-matrix)
+6. [Status Flow & Transition Rules](#6-status-flow--transition-rules)
+7. [Business Rules](#7-business-rules)
+8. [API Specification](#8-api-specification)
+9. [Module Architecture (NestJS)](#9-module-architecture-nestjs)
+10. [Frontend Architecture (Next.js)](#10-frontend-architecture-nextjs)
+11. [Security Requirements](#11-security-requirements)
+12. [SLA Design](#12-sla-design)
+13. [Notification System](#13-notification-system)
+14. [Phase 2 Preparation](#14-phase-2-preparation)
+
+---
+
+## 1. System Overview
+
+### แนวคิดหลัก
+
+ระบบ Ticket Support สำหรับงาน MA (Maintenance Agreement) ที่รองรับ:
+
+- **1 ลูกค้า → หลายระบบ (Systems)**
+- **แต่ละระบบ → มี MA Contract / Scope ไม่เหมือนกัน**
+- **แต่ละระบบ → มีหมวดหมู่ Ticket ของตัวเอง**
+- **2 ฝั่งหลัก**: Customer Portal + Admin/Support Console
+
+### 4 ชั้นหลักของระบบ
+
+```
+┌─────────────────────────────────────────────────┐
+│  1. Customer Layer                               │
+│     บริษัทลูกค้า → ผู้ใช้งาน → ระบบที่ถืออยู่   │
+├─────────────────────────────────────────────────┤
+│  2. Service Scope / MA Layer                     │
+│     Contract, Categories, SLA, ขอบเขตงาน        │
+├─────────────────────────────────────────────────┤
+│  3. Ticketing Layer                              │
+│     สร้าง/รับ/จัดการ/ปิด Ticket + Communication │
+├─────────────────────────────────────────────────┤
+│  4. Administration Layer                         │
+│     Dashboard, Reports, Master Data              │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Tech Stack
+
+| Layer | Technology | Notes |
+|---|---|---|
+| Frontend | Next.js 14 (App Router) | TypeScript |
+| UI Framework | Tailwind CSS + Lucide Icons | |
+| Backend | NestJS + Node.js | TypeScript |
+| Database | PostgreSQL | |
+| ORM | Prisma | |
+| API Docs | Swagger (`@nestjs/swagger`) | |
+| Auth | JWT + Refresh Token | `@nestjs/jwt` |
+| Validation | class-validator + class-transformer | ทุก DTO |
+| File Storage | S3 / MinIO / Cloudflare R2 | Presigned URL |
+| Rate Limiting | `@nestjs/throttler` | |
+| Queue (Phase 2) | BullMQ | Email / LINE notification |
+
+---
+
+## 3. Project Structure
+
+### Backend (NestJS)
+
+```
+backend/
+├── src/
+│   ├── main.ts
+│   ├── app.module.ts
+│   │
+│   ├── config/                        # Environment configs
+│   │   ├── database.config.ts
+│   │   ├── jwt.config.ts
+│   │   └── storage.config.ts
+│   │
+│   ├── common/                        # Shared utilities
+│   │   ├── decorators/
+│   │   │   ├── roles.decorator.ts
+│   │   │   └── current-user.decorator.ts
+│   │   ├── guards/
+│   │   │   ├── jwt-auth.guard.ts
+│   │   │   ├── roles.guard.ts
+│   │   │   └── ticket-access.guard.ts  # Row-level security
+│   │   ├── filters/
+│   │   │   └── http-exception.filter.ts
+│   │   ├── interceptors/
+│   │   │   └── audit-log.interceptor.ts
+│   │   ├── pipes/
+│   │   │   └── validation.pipe.ts
+│   │   └── constants/
+│   │       ├── roles.constant.ts
+│   │       └── ticket-transitions.constant.ts  # Transition matrix
+│   │
+│   ├── modules/
+│   │   ├── auth/
+│   │   │   ├── auth.module.ts
+│   │   │   ├── auth.controller.ts
+│   │   │   ├── auth.service.ts
+│   │   │   └── dto/
+│   │   │       ├── login.dto.ts
+│   │   │       └── refresh-token.dto.ts
+│   │   │
+│   │   ├── users/
+│   │   │   ├── users.module.ts
+│   │   │   ├── users.controller.ts
+│   │   │   ├── users.service.ts
+│   │   │   └── dto/
+│   │   │
+│   │   ├── customers/
+│   │   │   ├── customers.module.ts
+│   │   │   ├── customers.controller.ts
+│   │   │   ├── customers.service.ts
+│   │   │   └── dto/
+│   │   │
+│   │   ├── systems/                   # ระบบของลูกค้า
+│   │   │   ├── systems.module.ts
+│   │   │   ├── systems.controller.ts
+│   │   │   ├── systems.service.ts
+│   │   │   └── dto/
+│   │   │
+│   │   ├── contracts/                 # MA Contract / Scope
+│   │   │   ├── contracts.module.ts
+│   │   │   ├── contracts.controller.ts
+│   │   │   ├── contracts.service.ts
+│   │   │   └── dto/
+│   │   │
+│   │   ├── categories/
+│   │   │   ├── categories.module.ts
+│   │   │   ├── categories.controller.ts
+│   │   │   ├── categories.service.ts
+│   │   │   └── dto/
+│   │   │
+│   │   ├── tickets/
+│   │   │   ├── tickets.module.ts
+│   │   │   ├── tickets.controller.ts  # Customer Portal APIs
+│   │   │   ├── tickets-admin.controller.ts  # Admin/Support APIs
+│   │   │   ├── tickets.service.ts
+│   │   │   ├── tickets-transition.service.ts  # Status transition logic
+│   │   │   └── dto/
+│   │   │       ├── create-ticket.dto.ts
+│   │   │       ├── update-ticket.dto.ts
+│   │   │       ├── change-status.dto.ts
+│   │   │       └── ticket-filter.dto.ts
+│   │   │
+│   │   ├── comments/
+│   │   │   ├── comments.module.ts
+│   │   │   ├── comments.controller.ts
+│   │   │   ├── comments.service.ts
+│   │   │   └── dto/
+│   │   │
+│   │   ├── attachments/
+│   │   │   ├── attachments.module.ts
+│   │   │   ├── attachments.controller.ts
+│   │   │   ├── attachments.service.ts
+│   │   │   └── storage.service.ts     # S3 / MinIO integration
+│   │   │
+│   │   ├── audit-logs/
+│   │   │   ├── audit-logs.module.ts
+│   │   │   └── audit-logs.service.ts
+│   │   │
+│   │   ├── sla/
+│   │   │   ├── sla.module.ts
+│   │   │   ├── sla.service.ts         # SLA tracking + clock pause
+│   │   │   └── sla-policy.service.ts
+│   │   │
+│   │   ├── notifications/
+│   │   │   ├── notifications.module.ts
+│   │   │   ├── notifications.service.ts
+│   │   │   └── channels/
+│   │   │       ├── email.channel.ts
+│   │   │       └── in-app.channel.ts  # Phase 2: line.channel.ts
+│   │   │
+│   │   └── reports/
+│   │       ├── reports.module.ts
+│   │       ├── reports.controller.ts
+│   │       └── reports.service.ts
+│   │
+│   └── prisma/
+│       ├── prisma.module.ts
+│       └── prisma.service.ts
+│
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
+│
+├── test/
+├── .env
+├── .env.example
+└── package.json
+```
+
+### Frontend (Next.js)
+
+```
+frontend/
+├── src/
+│   ├── app/
+│   │   ├── (auth)/
+│   │   │   ├── login/page.tsx
+│   │   │   └── layout.tsx
+│   │   │
+│   │   ├── (customer)/                # Customer Portal
+│   │   │   ├── layout.tsx
+│   │   │   ├── dashboard/page.tsx
+│   │   │   ├── tickets/
+│   │   │   │   ├── page.tsx           # Ticket list
+│   │   │   │   ├── new/page.tsx       # Create ticket
+│   │   │   │   └── [id]/page.tsx      # Ticket detail
+│   │   │   └── profile/page.tsx
+│   │   │
+│   │   └── (admin)/                   # Admin / Support Console
+│   │       ├── layout.tsx
+│   │       ├── dashboard/page.tsx
+│   │       ├── tickets/
+│   │       │   ├── page.tsx
+│   │       │   └── [id]/page.tsx
+│   │       ├── customers/
+│   │       │   ├── page.tsx
+│   │       │   └── [id]/page.tsx
+│   │       ├── systems/page.tsx
+│   │       ├── contracts/page.tsx
+│   │       ├── categories/page.tsx
+│   │       ├── users/page.tsx
+│   │       ├── teams/page.tsx
+│   │       └── reports/page.tsx
+│   │
+│   ├── components/
+│   │   ├── ui/                        # Base UI components
+│   │   ├── tickets/
+│   │   │   ├── TicketCard.tsx
+│   │   │   ├── TicketTimeline.tsx
+│   │   │   ├── TicketStatusBadge.tsx
+│   │   │   ├── CommentBox.tsx
+│   │   │   └── FileUploader.tsx
+│   │   ├── layout/
+│   │   │   ├── Sidebar.tsx
+│   │   │   ├── Header.tsx
+│   │   │   └── Breadcrumb.tsx
+│   │   └── common/
+│   │       ├── DataTable.tsx
+│   │       ├── StatusSelect.tsx
+│   │       └── UserAvatar.tsx
+│   │
+│   ├── lib/
+│   │   ├── api/                       # API client functions
+│   │   │   ├── tickets.ts
+│   │   │   ├── customers.ts
+│   │   │   └── auth.ts
+│   │   ├── hooks/
+│   │   │   ├── useTickets.ts
+│   │   │   └── useAuth.ts
+│   │   └── utils/
+│   │       ├── date.ts
+│   │       └── status.ts
+│   │
+│   └── types/
+│       ├── ticket.types.ts
+│       ├── user.types.ts
+│       └── api.types.ts
+│
+└── package.json
+```
+
+---
+
+## 4. Database Schema (Prisma)
+
+```prisma
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  SUPPORT_ADMIN
+  SUPPORT_AGENT
+  CUSTOMER_ADMIN
+  CUSTOMER_USER
+}
+
+enum TicketStatus {
+  OPEN
+  TRIAGED
+  IN_PROGRESS
+  WAITING_CUSTOMER
+  WAITING_INTERNAL
+  RESOLVED
+  CLOSED
+  REOPENED
+  CANCELLED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum CommentType {
+  PUBLIC    // ลูกค้าเห็น
+  INTERNAL  // เห็นเฉพาะทีม support
+}
+
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+  LINE  // Phase 2
+}
+
+enum AuditAction {
+  TICKET_CREATED
+  STATUS_CHANGED
+  ASSIGNEE_CHANGED
+  TEAM_CHANGED
+  PRIORITY_CHANGED
+  COMMENT_ADDED
+  ATTACHMENT_ADDED
+  SLA_BREACHED
+  TICKET_REOPENED
+  TICKET_CLOSED
+}
+
+enum ScopeType {
+  IN_SCOPE   // อยู่ใน MA
+  OUT_SCOPE  // นอก MA
+}
+
+// ─────────────────────────────────────
+// CUSTOMER & ORGANIZATION
+// ─────────────────────────────────────
+
+model Customer {
+  id          String    @id @default(cuid())
+  name        String
+  code        String    @unique  // รหัสลูกค้า เช่น CUST-001
+  email       String?
+  phone       String?
+  address     String?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?           // Soft delete
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users       User[]
+  systems     CustomerSystem[]
+  contracts   Contract[]
+
+  @@map("customers")
+}
+
+model Team {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  members     User[]
+  tickets     Ticket[]
+
+  @@map("teams")
+}
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  password    String    // bcrypt hashed
+  firstName   String
+  lastName    String
+  phone       String?
+  role        UserRole
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // สำหรับ Customer User
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id])
+
+  // สำหรับ Support Agent
+  teamId      String?
+  team        Team?     @relation(fields: [teamId], references: [id])
+
+  // Relations
+  createdTickets    Ticket[]   @relation("TicketCreator")
+  assignedTickets   Ticket[]   @relation("TicketAssignee")
+  comments          Comment[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+  notificationPrefs NotificationPreference[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────
+// CUSTOMER SYSTEMS & CONTRACT
+// ─────────────────────────────────────
+
+model CustomerSystem {
+  id          String    @id @default(cuid())
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id])
+  name        String                    // เช่น "Booking System"
+  code        String                    // เช่น "SYS-BK-001"
+  description String?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contracts   Contract[]
+  tickets     Ticket[]
+
+  @@unique([customerId, code])
+  @@map("customer_systems")
+}
+
+model Contract {
+  id              String    @id @default(cuid())
+  customerId      String
+  customer        Customer  @relation(fields: [customerId], references: [id])
+  systemId        String
+  system          CustomerSystem @relation(fields: [systemId], references: [id])
+  contractNumber  String    @unique
+  name            String
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean   @default(true)
+  renewedFromId   String?   // อ้างอิงสัญญาเดิมเมื่อต่ออายุ
+  renewedFrom     Contract? @relation("ContractRenewal", fields: [renewedFromId], references: [id])
+  renewals        Contract[] @relation("ContractRenewal")
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  categoryScopes  ContractCategoryScope[]
+  slaPolicies     SlaPolicy[]
+
+  @@map("contracts")
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  systemId    String
+  system      CustomerSystem @relation(fields: [systemId], references: [id])
+  name        String                    // เช่น "Bug", "Change Request"
+  description String?
+  parentId    String?                   // Self-referencing สำหรับ sub-category
+  parent      Category? @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryTree")
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contractScopes  ContractCategoryScope[]
+  tickets         Ticket[]
+
+  @@map("categories")
+}
+
+// ผูก Category กับ Contract → กำหนดว่า category นี้ in-scope หรือ out-scope
+model ContractCategoryScope {
+  id          String    @id @default(cuid())
+  contractId  String
+  contract    Contract  @relation(fields: [contractId], references: [id])
+  categoryId  String
+  category    Category  @relation(fields: [categoryId], references: [id])
+  scopeType   ScopeType @default(IN_SCOPE)
+  isActive    Boolean   @default(true)
+
+  @@unique([contractId, categoryId])
+  @@map("contract_category_scopes")
+}
+
+// ─────────────────────────────────────
+// TICKET
+// ─────────────────────────────────────
+
+model Ticket {
+  id            String        @id @default(cuid())
+  ticketNumber  String        @unique  // TKT-2024-00001
+  title         String
+  description   String
+  status        TicketStatus  @default(OPEN)
+  priority      TicketPriority @default(MEDIUM)
+  scopeType     ScopeType?    // in-scope / out-scope ประเมินตอนรับเรื่อง
+
+  // Relations
+  customerId    String
+  customer      Customer      @relation(fields: [customerId], references: [id])  // ← เพิ่มใน Customer model
+  systemId      String
+  system        CustomerSystem @relation(fields: [systemId], references: [id])
+  categoryId    String?
+  category      Category?     @relation(fields: [categoryId], references: [id])
+
+  createdById   String
+  createdBy     User          @relation("TicketCreator", fields: [createdById], references: [id])
+
+  assigneeId    String?
+  assignee      User?         @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  teamId        String?
+  team          Team?         @relation(fields: [teamId], references: [id])
+
+  // Timestamps
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  comments        Comment[]
+  attachments     Attachment[]
+  auditLogs       AuditLog[]
+  slaTracking     SlaTracking?
+  followUpFromId  String?       // ticket ที่ reopen มาจาก closed ticket
+
+  @@map("tickets")
+}
+
+model Comment {
+  id          String      @id @default(cuid())
+  ticketId    String
+  ticket      Ticket      @relation(fields: [ticketId], references: [id])
+  authorId    String
+  author      User        @relation(fields: [authorId], references: [id])
+  content     String
+  type        CommentType @default(PUBLIC)
+  deletedAt   DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  attachments Attachment[]
+
+  @@map("comments")
+}
+
+model Attachment {
+  id          String    @id @default(cuid())
+  ticketId    String
+  ticket      Ticket    @relation(fields: [ticketId], references: [id])
+  commentId   String?
+  comment     Comment?  @relation(fields: [commentId], references: [id])
+  uploadedById String
+  fileName    String
+  fileSize    Int       // bytes
+  mimeType    String
+  storageKey  String    // S3/MinIO object key
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("attachments")
+}
+
+// ─────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  ticketId    String
+  ticket      Ticket      @relation(fields: [ticketId], references: [id])
+  actorId     String?     // null = system action
+  actor       User?       @relation(fields: [actorId], references: [id])
+  action      AuditAction
+  fromValue   String?     // ค่าเดิม
+  toValue     String?     // ค่าใหม่
+  metadata    Json?       // ข้อมูลเพิ่มเติม
+  createdAt   DateTime    @default(now())
+
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────
+// SLA
+// ─────────────────────────────────────
+
+model SlaPolicy {
+  id                      String    @id @default(cuid())
+  contractId              String
+  contract                Contract  @relation(fields: [contractId], references: [id])
+  priority                TicketPriority
+  firstResponseMinutes    Int       // เวลาตอบรับครั้งแรก (นาที)
+  resolutionMinutes       Int       // เวลาปิดงาน (นาที)
+  businessHoursOnly       Boolean   @default(true)
+  isActive                Boolean   @default(true)
+
+  @@unique([contractId, priority])
+  @@map("sla_policies")
+}
+
+model SlaTracking {
+  id                      String    @id @default(cuid())
+  ticketId                String    @unique
+  ticket                  Ticket    @relation(fields: [ticketId], references: [id])
+
+  firstResponseDue        DateTime?
+  firstResponseAt         DateTime?
+  isFirstResponseBreached Boolean   @default(false)
+
+  resolutionDue           DateTime?
+  resolutionAt            DateTime?
+  isResolutionBreached    Boolean   @default(false)
+
+  // SLA Clock Pause tracking
+  pausedAt                DateTime?           // เวลาที่ pause ล่าสุด
+  totalPausedMinutes      Int       @default(0) // รวมเวลาที่ถูก pause
+
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@map("sla_tracking")
+}
+
+// ─────────────────────────────────────
+// NOTIFICATION
+// ─────────────────────────────────────
+
+model NotificationPreference {
+  id          String              @id @default(cuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id])
+  channel     NotificationChannel
+  event       String              // ticket.created | status_changed | comment.added | sla.breached
+  isEnabled   Boolean             @default(true)
+
+  @@unique([userId, channel, event])
+  @@map("notification_preferences")
+}
+
+model Notification {
+  id          String    @id @default(cuid())
+  userId      String
+  title       String
+  body        String
+  channel     NotificationChannel
+  event       String
+  isRead      Boolean   @default(false)
+  metadata    Json?     // ticketId, etc.
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("notifications")
+}
+```
+
+---
+
+## 5. Role & Permission Matrix
+
+| Action | Super Admin | Support Admin | Support Agent | Customer Admin | Customer User |
+|---|:---:|:---:|:---:|:---:|:---:|
+| จัดการ Customer/System | ✅ | ✅ | ❌ | ❌ | ❌ |
+| จัดการ User ทุกคน | ✅ | ✅ | ❌ | ❌ | ❌ |
+| จัดการ User ของบริษัทตัวเอง | ✅ | ✅ | ❌ | ✅ | ❌ |
+| จัดการ Contract/Category | ✅ | ✅ | ❌ | ❌ | ❌ |
+| ดู Ticket ทั้งหมด | ✅ | ✅ | assigned only | ของบริษัทตัวเอง | ของตัวเอง |
+| สร้าง Ticket | ✅ | ✅ | ✅ | ✅ | ✅ |
+| เปลี่ยน Status | ✅ | ✅ | ✅ (บาง status) | จำกัด | จำกัด |
+| Assign Ticket | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Internal Note | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Public Comment | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ดู Dashboard/Report | ✅ | ✅ | limited | ของบริษัทตัวเอง | ❌ |
+
+### Role-based Status Transitions
+
+```typescript
+// ลูกค้าเปลี่ยน status เองได้เฉพาะ
+CUSTOMER_ALLOWED_TRANSITIONS = {
+  RESOLVED: ['CLOSED', 'REOPENED'],      // confirm ปิด หรือ reopen
+  WAITING_CUSTOMER: ['IN_PROGRESS'],     // ลูกค้าส่งข้อมูลเพิ่มเติมแล้ว
+}
+
+// Support/Admin เปลี่ยนได้ตาม ALLOWED_TRANSITIONS ทั้งหมด
+```
+
+---
+
+## 6. Status Flow & Transition Rules
+
+### Status Definitions
+
+| Status | ความหมาย | ใครเปลี่ยนได้ |
+|---|---|---|
+| `OPEN` | ลูกค้าเพิ่งแจ้ง | ระบบ (auto) |
+| `TRIAGED` | ทีม support ตรวจสอบเบื้องต้นแล้ว | Support |
+| `IN_PROGRESS` | กำลังดำเนินการ | Support |
+| `WAITING_CUSTOMER` | รอข้อมูลจากลูกค้า | Support |
+| `WAITING_INTERNAL` | รอทีมภายใน / dev / vendor | Support |
+| `RESOLVED` | ทีมแจ้งว่าแก้แล้ว รอลูกค้ายืนยัน | Support |
+| `CLOSED` | ปิดงานแล้ว | Customer / Support |
+| `REOPENED` | เปิดใหม่หลัง resolved/closed | Customer / Support |
+| `CANCELLED` | ยกเลิก | Support / Customer Admin |
+
+### Transition Matrix (ใช้เป็น Config ใน Backend)
+
+```typescript
+// src/common/constants/ticket-transitions.constant.ts
+
+export const ALLOWED_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
+  OPEN:             ['TRIAGED', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'CANCELLED'],
+  TRIAGED:          ['IN_PROGRESS', 'WAITING_CUSTOMER', 'WAITING_INTERNAL', 'CANCELLED'],
+  IN_PROGRESS:      ['WAITING_CUSTOMER', 'WAITING_INTERNAL', 'RESOLVED'],
+  WAITING_CUSTOMER: ['IN_PROGRESS', 'RESOLVED', 'CANCELLED'],
+  WAITING_INTERNAL: ['IN_PROGRESS', 'RESOLVED'],
+  RESOLVED:         ['CLOSED', 'REOPENED'],
+  REOPENED:         ['IN_PROGRESS', 'WAITING_CUSTOMER'],
+  CLOSED:           [],  // ไม่มี transition ตรง → ต้องสร้าง follow-up ticket
+  CANCELLED:        [],
+};
+
+// Statuses ที่ทำให้ SLA Clock หยุดนับ
+export const SLA_PAUSE_STATUSES: TicketStatus[] = [
+  'WAITING_CUSTOMER',
+  'WAITING_INTERNAL',
+];
+```
+
+### Status Transition Diagram
+
+```
+OPEN ──────→ TRIAGED ──────→ IN_PROGRESS ──────→ RESOLVED ──────→ CLOSED
+  │              │                 ↑ ↓                ↓
+  │              └─────────→ WAITING_CUSTOMER    REOPENED ──→ IN_PROGRESS
+  │              └─────────→ WAITING_INTERNAL ──→ IN_PROGRESS
+  └──────────────────────────────────────────────────────────→ CANCELLED
+```
+
+---
+
+## 7. Business Rules
+
+### เมื่อลูกค้าสร้าง Ticket
+
+```
+1. ตรวจสอบว่า user นี้ สังกัด customer นี้จริง
+2. ตรวจสอบว่า system นี้ เป็นของ customer นี้จริง
+3. ตรวจสอบว่า category นี้ ถูกผูกกับ system นี้จริง
+4. ตรวจสอบว่า contract ที่ active อยู่ cover system นี้อยู่
+5. Auto-generate ticketNumber (format: TKT-YYYY-XXXXX)
+6. สร้าง AuditLog: TICKET_CREATED
+7. Trigger notification → support team
+```
+
+### เมื่อ Agent เปลี่ยน Status
+
+```
+1. ตรวจสอบว่า transition นี้อนุญาตหรือไม่ (จาก ALLOWED_TRANSITIONS)
+2. ตรวจสอบ Role ว่ามีสิทธิ์เปลี่ยน status นี้ไหม
+3. ถ้า → RESOLVED: บันทึก resolvedAt
+4. ถ้า → CLOSED: บันทึก closedAt
+5. ถ้า → WAITING_CUSTOMER หรือ WAITING_INTERNAL: Pause SLA clock
+6. ถ้า ← WAITING_*: Resume SLA clock
+7. สร้าง AuditLog: STATUS_CHANGED (fromValue, toValue)
+8. Trigger notification → customer / agent
+```
+
+### เมื่อเพิ่ม Comment
+
+```
+1. ถ้า role เป็น CUSTOMER_*: บังคับให้ type = PUBLIC (ห้าม INTERNAL)
+2. ถ้า role เป็น SUPPORT_* หรือ ADMIN: เลือก PUBLIC หรือ INTERNAL ได้
+3. สร้าง AuditLog: COMMENT_ADDED
+4. ถ้า type = PUBLIC: Trigger notification → ฝั่งตรงข้าม
+```
+
+### เมื่อ List Tickets
+
+```
+CUSTOMER_USER:  WHERE createdById = currentUser.id AND customerId = currentUser.customerId
+CUSTOMER_ADMIN: WHERE customerId = currentUser.customerId
+SUPPORT_AGENT:  WHERE assigneeId = currentUser.id OR teamId = currentUser.teamId (ตาม policy)
+SUPPORT_ADMIN:  ไม่มี restriction
+SUPER_ADMIN:    ไม่มี restriction
+```
+
+### File Upload Policy
+
+```
+- Allowed types: pdf, jpg, jpeg, png, xlsx, docx
+- Max size per file: 10 MB
+- Max size per ticket: 30 MB
+- Storage: S3/MinIO (ไม่ใช่ DB)
+- URL: Presigned URL มีอายุ 1 ชั่วโมง (ไม่ใช่ public link ถาวร)
+```
+
+---
+
+## 8. API Specification
+
+### Auth APIs
+
+```
+POST   /api/auth/login              # Login → JWT + Refresh Token
+POST   /api/auth/refresh            # Refresh access token
+POST   /api/auth/logout             # Revoke refresh token
+GET    /api/auth/me                 # ข้อมูล current user
+```
+
+### Customer Portal APIs (ต้องการ Auth)
+
+```
+# Tickets
+GET    /api/tickets                 # List tickets ของตัวเอง (paginated + filter)
+POST   /api/tickets                 # สร้าง ticket ใหม่
+GET    /api/tickets/:id             # ดู ticket detail
+PATCH  /api/tickets/:id/status      # เปลี่ยน status (customer-allowed เท่านั้น)
+POST   /api/tickets/:id/follow-up   # สร้าง follow-up จาก closed ticket
+GET    /api/tickets/:id/timeline    # ดู history เรียงเวลา (status + comments รวมกัน)
+
+# Comments
+POST   /api/tickets/:id/comments    # เพิ่ม comment (PUBLIC เท่านั้น)
+GET    /api/tickets/:id/comments    # ดู comments (เฉพาะ PUBLIC)
+
+# Attachments
+POST   /api/tickets/:id/attachments # Upload ไฟล์
+GET    /api/attachments/:id/url     # Get presigned URL
+
+# Reference Data
+GET    /api/customer/systems        # ระบบของ customer ตัวเอง
+GET    /api/customer/systems/:id/categories  # categories ของระบบนั้น
+```
+
+### Admin / Support APIs (ต้องการ Auth + Role)
+
+```
+# Tickets
+GET    /api/admin/tickets           # List ทั้งหมด (filter, sort, paginate)
+GET    /api/admin/tickets/:id       # ดู ticket detail (รวม internal notes)
+PATCH  /api/admin/tickets/:id       # อัปเดต ticket (priority, scope, etc.)
+PATCH  /api/admin/tickets/:id/status      # เปลี่ยน status
+PATCH  /api/admin/tickets/:id/assign      # Assign to agent/team
+
+# Comments
+POST   /api/admin/tickets/:id/comments    # เพิ่ม comment (PUBLIC หรือ INTERNAL)
+GET    /api/admin/tickets/:id/comments    # ดู comments (รวม INTERNAL)
+
+# Master Data
+GET    /api/admin/customers               # List customers
+POST   /api/admin/customers               # สร้าง customer
+GET    /api/admin/customers/:id           # ดู customer detail
+PATCH  /api/admin/customers/:id           # แก้ไข customer
+DELETE /api/admin/customers/:id           # Soft delete
+
+GET    /api/admin/customers/:id/systems   # List systems ของ customer
+POST   /api/admin/customers/:id/systems   # สร้าง system
+PATCH  /api/admin/systems/:id             # แก้ไข system
+DELETE /api/admin/systems/:id             # Soft delete
+
+GET    /api/admin/contracts               # List contracts
+POST   /api/admin/contracts               # สร้าง contract
+PATCH  /api/admin/contracts/:id           # แก้ไข contract
+
+GET    /api/admin/systems/:id/categories  # List categories
+POST   /api/admin/systems/:id/categories  # สร้าง category
+PATCH  /api/admin/categories/:id          # แก้ไข
+DELETE /api/admin/categories/:id          # Soft delete
+
+GET    /api/admin/users                   # List users
+POST   /api/admin/users                   # สร้าง user
+PATCH  /api/admin/users/:id               # แก้ไข
+DELETE /api/admin/users/:id               # Soft delete
+
+GET    /api/admin/teams                   # List teams
+POST   /api/admin/teams                   # สร้าง team
+PATCH  /api/admin/teams/:id               # แก้ไข
+
+# Dashboard & Reports
+GET    /api/admin/dashboard               # KPI summary
+GET    /api/admin/customers/:id/dashboard # Dashboard ของ customer นั้น
+GET    /api/reports/tickets               # Ticket report (filter by date, status, etc.)
+GET    /api/reports/sla-breach            # Tickets ที่ SLA เกิน
+GET    /api/reports/agent-performance     # Performance report ของ agent
+```
+
+---
+
+## 9. Module Architecture (NestJS)
+
+### Ticket Transition Service
+
+```typescript
+// tickets-transition.service.ts
+
+@Injectable()
+export class TicketsTransitionService {
+  constructor(
+    private prisma: PrismaService,
+    private auditLogsService: AuditLogsService,
+    private slaService: SlaService,
+    private notificationsService: NotificationsService,
+  ) {}
+
+  async changeStatus(
+    ticketId: string,
+    newStatus: TicketStatus,
+    actorId: string,
+    actorRole: UserRole,
+  ) {
+    const ticket = await this.prisma.ticket.findUniqueOrThrow({
+      where: { id: ticketId },
+    });
+
+    // 1. ตรวจสอบ transition
+    const allowed = ALLOWED_TRANSITIONS[ticket.status];
+    if (!allowed.includes(newStatus)) {
+      throw new BadRequestException(
+        `Cannot transition from ${ticket.status} to ${newStatus}`,
+      );
+    }
+
+    // 2. ตรวจสอบ Role permission
+    if (actorRole.startsWith('CUSTOMER')) {
+      const customerAllowed = CUSTOMER_ALLOWED_TRANSITIONS[ticket.status] ?? [];
+      if (!customerAllowed.includes(newStatus)) {
+        throw new ForbiddenException('Not allowed to change to this status');
+      }
+    }
+
+    // 3. Prepare update data
+    const updateData: Prisma.TicketUpdateInput = { status: newStatus };
+    if (newStatus === 'RESOLVED') updateData.resolvedAt = new Date();
+    if (newStatus === 'CLOSED') updateData.closedAt = new Date();
+
+    // 4. Update ticket
+    const updated = await this.prisma.ticket.update({
+      where: { id: ticketId },
+      data: updateData,
+    });
+
+    // 5. Handle SLA clock
+    if (SLA_PAUSE_STATUSES.includes(newStatus)) {
+      await this.slaService.pauseClock(ticketId);
+    } else if (SLA_PAUSE_STATUSES.includes(ticket.status)) {
+      await this.slaService.resumeClock(ticketId);
+    }
+
+    // 6. Audit log
+    await this.auditLogsService.create({
+      ticketId,
+      actorId,
+      action: 'STATUS_CHANGED',
+      fromValue: ticket.status,
+      toValue: newStatus,
+    });
+
+    // 7. Notification
+    await this.notificationsService.emit('ticket.status_changed', {
+      ticketId,
+      fromStatus: ticket.status,
+      toStatus: newStatus,
+    });
+
+    return updated;
+  }
+}
+```
+
+### Row-Level Security Guard
+
+```typescript
+// ticket-access.guard.ts
+
+@Injectable()
+export class TicketAccessGuard implements CanActivate {
+  constructor(private prisma: PrismaService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const user = request.user;
+    const ticketId = request.params.id;
+
+    if (!ticketId) return true;
+
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+    });
+
+    if (!ticket) throw new NotFoundException('Ticket not found');
+
+    // Super Admin / Support Admin: access ทุก ticket
+    if (['SUPER_ADMIN', 'SUPPORT_ADMIN'].includes(user.role)) return true;
+
+    // Support Agent: access เฉพาะที่ assign ให้ตัวเอง หรือทีมตัวเอง
+    if (user.role === 'SUPPORT_AGENT') {
+      return ticket.assigneeId === user.id || ticket.teamId === user.teamId;
+    }
+
+    // Customer Admin: access ทุก ticket ของ customer ตัวเอง
+    if (user.role === 'CUSTOMER_ADMIN') {
+      return ticket.customerId === user.customerId;
+    }
+
+    // Customer User: access เฉพาะที่ตัวเองสร้าง
+    if (user.role === 'CUSTOMER_USER') {
+      return (
+        ticket.customerId === user.customerId &&
+        ticket.createdById === user.id
+      );
+    }
+
+    return false;
+  }
+}
+```
+
+---
+
+## 10. Frontend Architecture (Next.js)
+
+### API Client (ตัวอย่าง)
+
+```typescript
+// src/lib/api/tickets.ts
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL;
+
+export async function getTickets(params?: TicketFilterParams) {
+  const query = new URLSearchParams(params as any).toString();
+  const res = await fetch(`${API_BASE}/api/tickets?${query}`, {
+    headers: { Authorization: `Bearer ${getAccessToken()}` },
+  });
+  if (!res.ok) throw new Error('Failed to fetch tickets');
+  return res.json();
+}
+
+export async function createTicket(data: CreateTicketDto) {
+  const res = await fetch(`${API_BASE}/api/tickets`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getAccessToken()}`,
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to create ticket');
+  return res.json();
+}
+```
+
+### Ticket Status Badge Component
+
+```typescript
+// src/components/tickets/TicketStatusBadge.tsx
+
+const STATUS_CONFIG = {
+  OPEN:             { label: 'Open',             color: 'bg-blue-100 text-blue-800' },
+  TRIAGED:          { label: 'Triaged',           color: 'bg-purple-100 text-purple-800' },
+  IN_PROGRESS:      { label: 'In Progress',       color: 'bg-yellow-100 text-yellow-800' },
+  WAITING_CUSTOMER: { label: 'Waiting Customer',  color: 'bg-orange-100 text-orange-800' },
+  WAITING_INTERNAL: { label: 'Waiting Internal',  color: 'bg-gray-100 text-gray-800' },
+  RESOLVED:         { label: 'Resolved',          color: 'bg-green-100 text-green-800' },
+  CLOSED:           { label: 'Closed',            color: 'bg-gray-200 text-gray-600' },
+  REOPENED:         { label: 'Reopened',          color: 'bg-red-100 text-red-800' },
+  CANCELLED:        { label: 'Cancelled',         color: 'bg-red-200 text-red-600' },
+};
+
+export function TicketStatusBadge({ status }: { status: TicketStatus }) {
+  const config = STATUS_CONFIG[status];
+  return (
+    <span className={`px-2 py-1 rounded-full text-xs font-medium ${config.color}`}>
+      {config.label}
+    </span>
+  );
+}
+```
+
+---
+
+## 11. Security Requirements
+
+### JWT Configuration
+
+```typescript
+// jwt: access token อายุสั้น, refresh token อายุยาว
+ACCESS_TOKEN_EXPIRES  = '15m'
+REFRESH_TOKEN_EXPIRES = '7d'
+
+// Payload ที่ควรมีใน JWT
+{
+  sub: userId,
+  email: user.email,
+  role: user.role,
+  customerId: user.customerId,  // null ถ้าเป็น support/admin
+  teamId: user.teamId,          // null ถ้าเป็น customer
+}
+```
+
+### Rate Limiting
+
+```typescript
+// ใช้ @nestjs/throttler
+
+// Global defaults
+TTL = 60 seconds, LIMIT = 100 requests
+
+// Stricter limits per endpoint
+POST /api/tickets         → 20 req/hour/user
+POST /api/.../comments    → 60 req/hour/user
+POST /api/auth/login      → 5 req/15min/IP
+```
+
+### Input Validation (ทุก DTO ต้องมี)
+
+```typescript
+// ตัวอย่าง CreateTicketDto
+export class CreateTicketDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  title: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(5000)
+  description: string;
+
+  @IsString()
+  @IsNotEmpty()
+  systemId: string;
+
+  @IsString()
+  @IsOptional()
+  categoryId?: string;
+
+  @IsEnum(TicketPriority)
+  @IsOptional()
+  priority?: TicketPriority;
+}
+```
+
+---
+
+## 12. SLA Design
+
+### SLA Policy ต่อ Priority
+
+| Priority | First Response | Resolution | หมายเหตุ |
+|---|---|---|---|
+| CRITICAL | 1 ชั่วโมง | 4 ชั่วโมง | 24/7 |
+| HIGH | 4 ชั่วโมง | 8 ชั่วโมง | Business hours |
+| MEDIUM | 1 วันทำการ | 3 วันทำการ | Business hours |
+| LOW | 2 วันทำการ | 7 วันทำการ | Business hours |
+
+> ค่าข้างต้นเป็นค่า default — แต่ละ Contract กำหนด SLA Policy เองได้
+
+### SLA Clock Pause Logic
+
+```
+SLA หยุดนับเมื่อ status เป็น:
+  - WAITING_CUSTOMER
+  - WAITING_INTERNAL
+
+SLA เดินต่อเมื่อ transition ออกจาก status ข้างต้น
+
+การคำนวณ:
+  effectiveElapsed = totalElapsed - totalPausedMinutes
+  isBreached = effectiveElapsed > policyMinutes
+```
+
+---
+
+## 13. Notification System
+
+### Events ที่ต้อง Trigger
+
+| Event | แจ้ง | Channel Phase 1 |
+|---|---|---|
+| `ticket.created` | Support Team | Email + In-App |
+| `ticket.assigned` | Assignee | Email + In-App |
+| `ticket.status_changed` | Customer + Assignee | Email + In-App |
+| `comment.added` (PUBLIC) | ฝั่งตรงข้าม | Email + In-App |
+| `sla.breached` | Support Admin | Email + In-App |
+
+### Architecture (รองรับ Phase 2)
+
+```typescript
+// notifications.service.ts
+// ใช้ Event pattern เพื่อให้ Phase 2 เพิ่ม LINE channel ได้โดยไม่แตะ core
+
+async emit(event: string, payload: any) {
+  const preferences = await this.getPreferencesByEvent(event, payload);
+  
+  for (const pref of preferences) {
+    switch (pref.channel) {
+      case 'EMAIL':   await this.emailChannel.send(pref, payload);   break;
+      case 'IN_APP':  await this.inAppChannel.send(pref, payload);   break;
+      case 'LINE':    await this.lineChannel.send(pref, payload);    break; // Phase 2
+    }
+  }
+}
+```
+
+---
+
+## 14. Phase 2 Preparation
+
+สิ่งที่ต้องเตรียมไว้ใน Phase 1 เพื่อให้ Phase 2 ง่ายขึ้น:
+
+| รายการ | สิ่งที่ทำใน Phase 1 |
+|---|---|
+| LINE OA Integration | สร้าง `NotificationChannel.LINE` enum และ `line.channel.ts` stub ไว้ |
+| LINE User Linking | เพิ่ม field `lineUserId` ใน User model (nullable) |
+| Queue System | ติดตั้ง BullMQ เตรียมไว้ แม้ยังไม่ใช้ |
+| Webhook Receiver | สร้าง `/api/webhooks/line` endpoint รับ LINE events |
+| Mobile-ready API | ทุก API ออกแบบให้ Stateless และ token-based อยู่แล้ว |
+
+---
+
+## 📌 Development Priority (Phase 1)
+
+### Sprint 1 — Foundation ✅ เสร็จแล้ว
+- [x] Project setup (NestJS + Next.js + Prisma) — สร้าง project structure ครบทั้ง backend/frontend
+- [x] Database schema + migrations — `prisma/schema.prisma` ครบทุก model พร้อม comment ภาษาไทย
+- [x] Auth module (Login + JWT + Refresh Token) — JWT Strategy, Token Rotation, `/api/auth/*`
+- [x] User management API — CRUD + Soft delete + Role-based filter, `/api/admin/users`
+
+**Config files ที่สร้าง:** `tsconfig.json`, `tsconfig.build.json`, `nest-cli.json`
+**Common layer:** Guards (JWT/Roles/TicketAccess), Decorators, Filters, Constants
+
+---
+
+### Sprint 2 — Master Data 🔄 กำลังดำเนินการ
+- [ ] Customer + System + Contract APIs
+- [ ] Category API (with parent support)
+- [ ] Admin UI: Customer/System/Contract management
+
+### Sprint 3 — Core Ticketing
+- [ ] Ticket CRUD APIs
+- [ ] Status transition + validation
+- [ ] Comment API (PUBLIC/INTERNAL)
+- [ ] File upload (Attachment API + S3)
+- [ ] Audit log
+
+### Sprint 4 — Customer Portal
+- [ ] Customer Portal UI
+- [ ] Create ticket flow
+- [ ] Ticket list + detail + timeline
+- [ ] Comment + file upload UI
+
+### Sprint 5 — Support Console
+- [ ] Admin/Support ticket management UI
+- [ ] Ticket assignment
+- [ ] Internal note
+- [ ] Status management
+
+### Sprint 6 — SLA + Notification + Dashboard
+- [ ] SLA tracking service
+- [ ] Email notification
+- [ ] In-app notification
+- [ ] Dashboard + basic reports
+
+---
+
+*Document prepared for Claude Code / Cursor AI-assisted development*
+*Last updated: 2026-04-21 — Sprint 1 completed*
