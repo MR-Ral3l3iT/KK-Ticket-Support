@@ -1,13 +1,18 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { join } from 'path';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   app.setGlobalPrefix('api');
+
+  // Serve uploaded files at /api/files/{customerCode}/{year}/{month}/{ticketNumber}/{file}
+  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/api/files' });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -26,7 +31,7 @@ async function bootstrap() {
 
   const config = new DocumentBuilder()
     .setTitle('Ticket Support MA API')
-    .setDescription('Ticket Support System for Maintenance Agreement')
+    .setDescription('ระบบ Ticket Support สำหรับงาน Maintenance Agreement (MA) — จัดการลูกค้า ระบบ สัญญา หมวดหมู่ และ Ticket ครบวงจร')
     .setVersion('1.0')
     .addBearerAuth()
     .build();

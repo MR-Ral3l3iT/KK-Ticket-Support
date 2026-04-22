@@ -1253,6 +1253,52 @@ async emit(event: string, payload: any) {
 
 ---
 
+## 🧪 Test Accounts & Login URLs
+
+> ข้อมูลด้านล่างมาจาก `backend/prisma/seed.ts` — รัน `npm run prisma:seed` ใน backend ก่อนทดสอบ
+
+### Login URL
+
+| ฝั่ง | URL |
+|---|---|
+| Admin / Support Console | `http://localhost:3000/login` → redirect ไปที่ `/admin/dashboard` |
+| Customer Portal | `http://localhost:3000/login` → redirect ไปที่ `/dashboard` |
+
+> ใช้หน้า login เดียวกัน ระบบ redirect อัตโนมัติตาม role หลัง login สำเร็จ
+
+---
+
+### Admin & Support Accounts → เข้าหน้า `/admin/*`
+
+| Role | Email | Password | สิทธิ์ |
+|---|---|---|---|
+| SUPER_ADMIN | `admin@ticketma.com` | `Admin@1234` | เข้าถึงทุกหน้า ทุกข้อมูล |
+| SUPPORT_ADMIN | `support.admin@ticketma.com` | `Support@1234` | จัดการ Ticket + Master Data |
+| SUPPORT_AGENT | `agent@ticketma.com` | `Agent@1234` | จัดการ Ticket ที่ assign ให้ตัวเอง/ทีม |
+
+### Customer Accounts → เข้าหน้า `/dashboard`, `/tickets/*`, `/profile`
+
+| Role | Email | Password | บริษัท | สิทธิ์ |
+|---|---|---|---|---|
+| CUSTOMER_ADMIN | `cust.admin@demo.co.th` | `Cust@1234` | Demo Company Co., Ltd. | ดู Ticket ทั้งหมดของบริษัท |
+| CUSTOMER_USER | `user@demo.co.th` | `User@1234` | Demo Company Co., Ltd. | ดู/สร้าง Ticket ของตัวเองเท่านั้น |
+
+### Demo Seed Data ที่มีในระบบ
+
+| รายการ | ข้อมูล |
+|---|---|
+| Customer | Demo Company Co., Ltd. (code: `DEMO001`) |
+| System | Demo Web Application (code: `WEB001`) |
+| Categories | Bug / ข้อผิดพลาด, Feature Request, General Support |
+| Contract | MA-2026-DEMO001 (01 ม.ค. – 31 ธ.ค. 2026) |
+| Team | Support Team A (มี agent@ticketma.com เป็นสมาชิก) |
+| SLA (LOW) | First Response 8h / Resolution 48h |
+| SLA (MEDIUM) | First Response 4h / Resolution 24h |
+| SLA (HIGH) | First Response 1h / Resolution 8h |
+| SLA (CRITICAL) | First Response 30m / Resolution 4h |
+
+---
+
 ## 📌 Development Priority (Phase 1)
 
 ### Sprint 1 — Foundation ✅ เสร็จแล้ว
@@ -1266,37 +1312,150 @@ async emit(event: string, payload: any) {
 
 ---
 
-### Sprint 2 — Master Data 🔄 กำลังดำเนินการ
-- [ ] Customer + System + Contract APIs
-- [ ] Category API (with parent support)
-- [ ] Admin UI: Customer/System/Contract management
+### Sprint 2 — Master Data ✅ เสร็จแล้ว
+- [x] Customer API — CRUD + Soft delete + unique code, `/api/admin/customers`
+- [x] System API (CustomerSystem) — CRUD + unique code per customer, `/api/admin/systems`
+- [x] Contract API — CRUD + date validation + unique contractNumber, `/api/admin/contracts`
+- [x] Category API — CRUD + tree structure (parentId) + unique name per level, `/api/admin/categories`
+- [x] Team API — CRUD + member list, `/api/admin/teams`
+- [x] Swagger คำอธิบายภาษาไทยทุก endpoint (Auth, Users, Customers, Systems, Contracts, Categories, Teams)
 
-### Sprint 3 — Core Ticketing
-- [ ] Ticket CRUD APIs
-- [ ] Status transition + validation
-- [ ] Comment API (PUBLIC/INTERNAL)
-- [ ] File upload (Attachment API + S3)
-- [ ] Audit log
+---
 
-### Sprint 4 — Customer Portal
-- [ ] Customer Portal UI
-- [ ] Create ticket flow
-- [ ] Ticket list + detail + timeline
-- [ ] Comment + file upload UI
+### Sprint 3 — Core Ticketing ✅ เสร็จแล้ว (Backend)
+- [x] AuditLogs service — บันทึกทุก action บน Ticket (TICKET_CREATED, STATUS_CHANGED, ASSIGNEE_CHANGED, ...)
+- [x] SLA service — initializeSla, pauseClock, resumeClock, recordFirstResponse, recordResolution
+- [x] Notifications service — In-app notification + emit event pattern (Phase 2: Email/LINE)
+- [x] Ticket API (Customer Portal) — CRUD + Follow-up + Timeline, `/api/tickets/*`
+- [x] Ticket API (Admin) — List/Update/Status/Assign, `/api/admin/tickets/*`
+- [x] Ticket number generation — format: `TKT-YYYY-XXXXX`
+- [x] Status transition engine — ตรวจสอบ transition matrix + role-based restriction
+- [x] Comment API — PUBLIC/INTERNAL + enforce PUBLIC for customer, `/api/tickets/:id/comments` + `/api/admin/tickets/:id/comments`
+- [x] First response tracking — บันทึก `firstResponseAt` เมื่อ support ตอบ PUBLIC comment ครั้งแรก
+- [x] Attachment API — upload + presigned URL (Phase 1: local, Phase 2: S3/MinIO), `/api/tickets/:id/attachments`
+- [x] Customer Portal ref data — `/api/customer/systems`, `/api/customer/systems/:id/categories`
+- [x] Dashboard API — KPI summary, SLA breach count, `/api/admin/dashboard`
+- [x] Reports API — Ticket report + SLA breach report, `/api/reports/*`
 
-### Sprint 5 — Support Console
-- [ ] Admin/Support ticket management UI
-- [ ] Ticket assignment
-- [ ] Internal note
-- [ ] Status management
+**หมายเหตุ:** Storage service Phase 1 บันทึกไฟล์ใน `./uploads/` (local) — Phase 2 เปลี่ยนเป็น S3/MinIO
 
-### Sprint 6 — SLA + Notification + Dashboard
-- [ ] SLA tracking service
-- [ ] Email notification
-- [ ] In-app notification
-- [ ] Dashboard + basic reports
+---
+
+### Sprint 4 — Frontend Theme + UI Components ✅ เสร็จแล้ว
+- [x] Tailwind config — primary `#154c79`, secondary `#1e81b0`, Prompt font variable, custom animations/shadows
+- [x] postcss.config.js + next.config.js
+- [x] tsconfig.json — `@/*` path alias เพิ่ม
+- [x] package.json — เพิ่ม clsx + tailwind-merge
+- [x] `src/app/globals.css` — Tailwind directives + custom scrollbar
+- [x] `src/app/layout.tsx` — Prompt font (next/font/google) + ToastProvider
+- [x] `src/lib/utils/cn.ts` — cn() utility
+- [x] UI Components ใน `src/components/ui/`:
+  - Button (variant: primary/secondary/outline/ghost/danger, size: sm/md/lg, loading state, icons)
+  - Input (label, error, hint, leftIcon, rightIcon)
+  - Textarea (label, error, hint)
+  - Checkbox (custom visual, accessible native input, description)
+  - Select (options array, placeholder, label, error)
+  - Toggle/Switch (sm/md size)
+  - Card + CardHeader + CardTitle + CardBody + CardFooter
+  - Table + TableHead + TableBody + TableRow + TableTh + TableTd (sortable support)
+  - Badge (7 variants: default/primary/secondary/success/warning/danger/info, dot option)
+  - Tag (closeable, 3 variants)
+  - Pagination (smart ellipsis, showTotal)
+  - Modal (5 sizes, ESC key, backdrop click)
+  - Toast + ToastProvider + useToast hook (4 variants, auto-dismiss)
+  - Spinner + SpinnerPage
+  - Avatar (initials with color hash from name, image support)
+  - Tooltip (4 positions)
+  - Divider (horizontal/vertical/with label)
+  - EmptyState (icon, title, description, action)
+  - `index.ts` barrel export
+- [x] Admin routes restructured → nested under `/admin/*` (fixed Next.js route group conflict)
+
+### Sprint 5 — Auth + Admin Console UI ✅ เสร็จแล้ว
+- [x] `lib/api/client.ts` — centralized `apiFetch` with auto token-refresh + redirect on 401
+- [x] `lib/context/AuthContext.tsx` — AuthProvider + `useAuthContext()` hook (login/logout/user state)
+- [x] `lib/hooks/useApi.ts` — reusable data-fetching hook (loading/error/reload)
+- [x] `types/master.types.ts` — Customer, CustomerSystem, Contract, Category, Team, UserListItem, DashboardKpi
+- [x] API clients: `customers`, `systems`, `contracts`, `categories`, `teams`, `users`, `admin-tickets`, `reports`
+- [x] Login page — split-card design, validation, show/hide password, role-based redirect
+- [x] `(auth)/layout.tsx` — redirect to admin/customer dashboard if already logged in
+- [x] `(admin)/layout.tsx` — auth guard, role check (ADMIN_ROLES only), Admin Sidebar
+- [x] `AdminSidebar` — fixed left sidebar, active highlight, grouped nav (Dashboard, Tickets, Master Data, ทีมงาน, รายงาน)
+- [x] `AdminHeader` — page title, user avatar dropdown, logout
+- [x] `/admin/dashboard` — KPI cards (6 metrics)
+- [x] `/admin/customers` — list + search + create/edit modal + delete confirm + link to detail
+- [x] `/admin/customers/[id]` — customer detail + systems list (inline CRUD)
+- [x] `/admin/systems` — list + search + create/edit modal (เลือกลูกค้า, toggle active)
+- [x] `/admin/contracts` — list + create/edit modal (SLA matrix per priority)
+- [x] `/admin/categories` — list + parent/child hierarchy support
+- [x] `/admin/teams` — list + create/edit modal
+- [x] `/admin/users` — list + create/edit modal + reset password + role-based field rendering (customer/team)
+- [x] `/admin/tickets` — list + filter (status/priority/search) + pagination
+- [x] `/admin/tickets/[id]` — detail + timeline + add comment (public/internal toggle) + change status + assign agent + SLA status
+- [x] `/admin/reports` — placeholder (Charts coming in Sprint 7)
+
+### Sprint 6 — Customer Portal UI ✅ เสร็จแล้ว
+- [x] `(customer)/layout.tsx` — auth guard (CUSTOMER_ADMIN / CUSTOMER_USER), redirect non-customer roles to admin
+- [x] `CustomerHeader` — fixed top navbar: logo + nav links (Dashboard / Tickets ของฉัน) + Bell icon + user dropdown (profile / logout) + mobile hamburger menu
+- [x] `lib/api/customer-portal.ts` — API client: getSystems, getCategories, getTickets, getTicket, createTicket, createFollowUp, getTimeline, transition, addComment, getMe, updateProfile, changePassword
+- [x] `/dashboard` — greeting + 3 stat cards (open / waiting-for-customer / resolved) + recent 5 tickets list
+- [x] `/tickets` — ticket list + search + status/priority filter + pagination (10 per page)
+- [x] `/tickets/new` — create ticket form: เลือก System → categories load ตาม system + Priority selector + title + description + validation
+- [x] `/tickets/[id]` — ticket detail: header (ticketNumber / status / priority) + description card + timeline (status changes + public comments merged) + add comment form + customer action buttons (confirm close / reopen) + details sidebar (system / category / assignee / priority / resolvedAt)
+- [x] `/profile` — edit profile (ชื่อ / นามสกุล / เบอร์โทร) + change password (current + new + confirm validation)
+
+**Actual files:**
+- `src/app/(customer)/layout.tsx`
+- `src/components/layout/CustomerHeader.tsx`
+- `src/lib/api/customer-portal.ts`
+- `src/app/(customer)/dashboard/page.tsx`
+- `src/app/(customer)/tickets/page.tsx`
+- `src/app/(customer)/tickets/new/page.tsx`
+- `src/app/(customer)/tickets/[id]/page.tsx`
+- `src/app/(customer)/profile/page.tsx`
+
+### File Attachment System ✅ เสร็จแล้ว (เพิ่มเติมหลัง Sprint 6)
+
+#### Storage Path Structure
+```
+backend/uploads/
+└── {CUSTOMER_CODE}/        e.g., DEMO001
+    └── {YEAR}/             e.g., 2026
+        └── {MONTH}/        e.g., 04
+            └── {TKT_NUM}/  e.g., TKT-2026-00001
+                ├── abc123ef.webp   ← รูปภาพ (แปลงเป็น WebP อัตโนมัติ)
+                └── def456ab.pdf    ← ไฟล์อื่นๆ คง extension เดิม
+```
+
+#### ฝั่ง Backend
+- [x] `sharp` — convert รูปภาพ (jpg/png/gif/webp) เป็น WebP คุณภาพ 82% ก่อนบันทึก
+- [x] `StorageService` — path-based storage: `{customerCode}/{year}/{month}/{ticketNumber}/{uid}.{ext}`
+- [x] Validation: ไฟล์ละไม่เกิน 10 MB, รวมไม่เกิน 30 MB, รองรับ jpg/png/gif/webp/pdf/xlsx/docx/txt
+- [x] Multi-file upload ด้วย `FilesInterceptor` (สูงสุด 10 ไฟล์ต่อครั้ง)
+- [x] `findByTicket` — ส่ง URL กลับมาพร้อมกันเลย (ไม่ต้อง call แยก)
+- [x] Static file serving ที่ `/api/files/{path}` ผ่าน `NestExpressApplication.useStaticAssets`
+- [x] Soft delete + ลบไฟล์จาก disk พร้อมกัน
+
+#### ฝั่ง Frontend
+- [x] `FileUploader` component (`src/components/tickets/FileUploader.tsx`):
+  - Drag & drop zone + click to browse
+  - Preview รูปภาพก่อน upload (ObjectURL)
+  - Status per file: pending → uploading → done / error
+  - แสดง existing attachments พร้อมปุ่มดาวน์โหลด
+  - ปุ่มลบ per file (ทั้ง pending และ existing)
+  - รองรับ 2 modes: auto-upload (ticketId มี) และ collect mode (ticketId ยังไม่มี)
+- [x] `apiUpload()` ใน `client.ts` — multipart upload พร้อม auto token-refresh
+- [x] `customer-portal.ts` — เพิ่ม `uploadAttachments`, `getAttachments`, `deleteAttachment`
+- [x] `/tickets/new` — เลือกไฟล์ก่อน ส่งหลัง ticket ถูกสร้างแล้ว
+- [x] `/tickets/[id]` — แสดง existing + upload เพิ่ม + ลบได้ (auto-upload ทันที)
+
+### Sprint 7 — SLA + Notification + Dashboard Charts
+- [ ] SLA countdown timer display
+- [ ] In-app notification bell (unread count + dropdown)
+- [ ] Dashboard charts (Recharts)
+- [ ] Reports: export CSV
 
 ---
 
 *Document prepared for Claude Code / Cursor AI-assisted development*
-*Last updated: 2026-04-21 — Sprint 1 completed*
+*Last updated: 2026-04-22 — เพิ่ม File Attachment System: WebP conversion, path-based storage, multi-file upload, drag & drop preview*

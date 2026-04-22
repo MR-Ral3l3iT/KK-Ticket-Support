@@ -4,10 +4,12 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
+import { TeamsModule } from './modules/teams/teams.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { SystemsModule } from './modules/systems/systems.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
 import { CategoriesModule } from './modules/categories/categories.module';
+import { CustomerPortalModule } from './modules/customer-portal/customer-portal.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { AttachmentsModule } from './modules/attachments/attachments.module';
@@ -34,10 +36,12 @@ import storageConfig from './config/storage.config';
     PrismaModule,
     AuthModule,
     UsersModule,
+    TeamsModule,
     CustomersModule,
     SystemsModule,
     ContractsModule,
     CategoriesModule,
+    CustomerPortalModule,
     TicketsModule,
     CommentsModule,
     AttachmentsModule,

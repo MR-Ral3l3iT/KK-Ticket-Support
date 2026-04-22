@@ -1,5 +1,6 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
   NotFoundException,
   ForbiddenException,
@@ -27,6 +28,11 @@ const USER_SELECT = {
   customer: { select: { id: true, name: true, code: true } },
   team: { select: { id: true, name: true } },
 } as const;
+
+const CUSTOMER_ROLES = new Set<UserRole>([
+  UserRole.CUSTOMER_ADMIN,
+  UserRole.CUSTOMER_USER,
+]);
 
 @Injectable()
 export class UsersService {
@@ -69,18 +75,48 @@ export class UsersService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  async findOne(id: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id },
+  async findOne(id: string, actorRole?: UserRole, actorCustomerId?: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
       select: USER_SELECT,
     });
-    if (!user || (user as any).deletedAt) throw new NotFoundException('User not found');
+
+    if (!user) throw new NotFoundException('User not found');
+
+    if (actorRole === UserRole.CUSTOMER_ADMIN) {
+      if (!actorCustomerId || user.customerId !== actorCustomerId) {
+        throw new ForbiddenException('ไม่มีสิทธิ์เข้าถึงผู้ใช้งานนี้');
+      }
+      if (!CUSTOMER_ROLES.has(user.role)) {
+        throw new ForbiddenException('ไม่มีสิทธิ์เข้าถึงผู้ใช้งานนี้');
+      }
+    }
+
     return user;
   }
 
-  async create(dto: CreateUserDto) {
+  async create(dto: CreateUserDto, actorRole: UserRole, actorCustomerId?: string) {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) throw new ConflictException('Email already in use');
+
+    const isCustomerRole = CUSTOMER_ROLES.has(dto.role);
+    const isSupportAgent = dto.role === UserRole.SUPPORT_AGENT;
+
+    if (actorRole === UserRole.CUSTOMER_ADMIN) {
+      if (!actorCustomerId) throw new ForbiddenException('ไม่พบบริษัทของผู้ใช้งานปัจจุบัน');
+      if (dto.role !== UserRole.CUSTOMER_USER) {
+        throw new ForbiddenException('CUSTOMER_ADMIN สามารถสร้างได้เฉพาะ CUSTOMER_USER เท่านั้น');
+      }
+      dto.customerId = actorCustomerId;
+      dto.teamId = undefined;
+    }
+
+    if (isCustomerRole && !dto.customerId) {
+      throw new BadRequestException('CUSTOMER roles ต้องระบุ customerId');
+    }
+    if (isSupportAgent && !dto.teamId) {
+      throw new BadRequestException('SUPPORT_AGENT ต้องระบุ teamId');
+    }
 
     const hashedPassword = await bcrypt.hash(dto.password, 12);
 
@@ -92,15 +128,27 @@ export class UsersService {
         lastName: dto.lastName,
         phone: dto.phone,
         role: dto.role,
-        customerId: dto.customerId,
-        teamId: dto.teamId,
+        customerId: isCustomerRole ? dto.customerId : undefined,
+        teamId: isSupportAgent ? dto.teamId : undefined,
       },
       select: USER_SELECT,
     });
   }
 
-  async update(id: string, dto: UpdateUserDto) {
-    await this.findOne(id);
+  async update(id: string, dto: UpdateUserDto, actorRole: UserRole, actorCustomerId?: string) {
+    const target = await this.findOne(id, actorRole, actorCustomerId);
+
+    if (actorRole === UserRole.CUSTOMER_ADMIN) {
+      if (target.role !== UserRole.CUSTOMER_USER) {
+        throw new ForbiddenException('CUSTOMER_ADMIN สามารถแก้ไขได้เฉพาะ CUSTOMER_USER เท่านั้น');
+      }
+      if (dto.role && dto.role !== UserRole.CUSTOMER_USER) {
+        throw new ForbiddenException('CUSTOMER_ADMIN ไม่สามารถเปลี่ยน role เป็นประเภทอื่นได้');
+      }
+      if (dto.teamId !== undefined) {
+        throw new ForbiddenException('CUSTOMER_ADMIN ไม่สามารถกำหนดทีม Support ได้');
+      }
+    }
 
     const data: Prisma.UserUpdateInput = {
       ...(dto.firstName && { firstName: dto.firstName }),
@@ -122,8 +170,22 @@ export class UsersService {
     });
   }
 
-  async remove(id: string) {
-    await this.findOne(id);
+  async resetPassword(id: string, newPassword: string, actorRole: UserRole, actorCustomerId?: string) {
+    await this.findOne(id, actorRole, actorCustomerId);
+    const hashed = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id },
+      data: { password: hashed },
+    });
+  }
+
+  async remove(id: string, actorRole: UserRole, actorCustomerId?: string) {
+    const target = await this.findOne(id, actorRole, actorCustomerId);
+
+    if (actorRole === UserRole.CUSTOMER_ADMIN && target.role !== UserRole.CUSTOMER_USER) {
+      throw new ForbiddenException('CUSTOMER_ADMIN สามารถลบได้เฉพาะ CUSTOMER_USER เท่านั้น');
+    }
+
     await this.prisma.user.update({
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
