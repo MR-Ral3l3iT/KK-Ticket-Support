@@ -1449,11 +1449,11 @@ backend/uploads/
 - [x] `/tickets/new` — เลือกไฟล์ก่อน ส่งหลัง ticket ถูกสร้างแล้ว
 - [x] `/tickets/[id]` — แสดง existing + upload เพิ่ม + ลบได้ (auto-upload ทันที)
 
-### Sprint 7 — SLA + Notification + Dashboard Charts
-- [ ] SLA countdown timer display
-- [ ] In-app notification bell (unread count + dropdown)
-- [ ] Dashboard charts (Recharts)
-- [ ] Reports: export CSV
+### Sprint 7 — SLA + Notification + Dashboard Charts ✅ เสร็จแล้ว
+- [x] SLA countdown timer display — `SlaCountdown` component แสดงเวลาที่เหลือ (live countdown ทุก 30s), รองรับ paused/breached/completed
+- [x] In-app notification bell (unread count + dropdown) — ครบทั้ง AdminHeader + CustomerHeader
+- [x] Dashboard charts (Recharts) — Line chart รายวัน 30 วัน, Bar chart by priority, Bar chart by status
+- [x] Reports: export CSV — หน้า `/admin/reports` พร้อม filter + ตาราง + Export CSV (download with auth)
 
 ---
 

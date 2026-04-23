@@ -71,6 +71,39 @@ export const api = {
   delete: <T>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
 };
 
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const url = `${API_BASE}${path}`;
+  let token = getToken('accessToken');
+
+  const makeHeaders = (t: string | null): Record<string, string> =>
+    t ? { Authorization: `Bearer ${t}` } : {};
+
+  let res = await fetch(url, { headers: makeHeaders(token) });
+
+  if (res.status === 401) {
+    const newToken = await tryRefresh();
+    if (newToken) {
+      token = newToken;
+      res = await fetch(url, { headers: makeHeaders(newToken) });
+    } else {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      if (typeof window !== 'undefined') window.location.href = '/login';
+      throw new Error('Unauthorized');
+    }
+  }
+
+  if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
 // Multipart upload — does NOT set Content-Type (browser sets with boundary automatically)
 export async function apiUpload<T = unknown>(
   path: string,

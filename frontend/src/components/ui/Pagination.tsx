@@ -12,7 +12,14 @@ export interface PaginationProps {
 }
 
 export function Pagination({ page, totalPages, onPageChange, showTotal, total }: PaginationProps) {
-  if (totalPages <= 1) return null;
+  if (totalPages <= 1) {
+    if (!showTotal || total === undefined) return null;
+    return (
+      <p className="text-sm text-gray-500">
+        ทั้งหมด <span className="font-medium text-gray-700">{total.toLocaleString()}</span> รายการ
+      </p>
+    );
+  }
 
   const getPages = (): (number | '...')[] => {
     if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);

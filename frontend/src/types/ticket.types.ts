@@ -13,6 +13,17 @@ export type TicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export type ScopeType = 'IN_SCOPE' | 'OUT_SCOPE';
 
+export interface SlaTracking {
+  firstResponseDue?: string | null;
+  firstResponseAt?: string | null;
+  resolutionDue?: string | null;
+  resolutionAt?: string | null;
+  isFirstResponseBreached: boolean;
+  isResolutionBreached: boolean;
+  pausedAt?: string | null;
+  totalPausedMinutes: number;
+}
+
 export interface Ticket {
   id: string;
   ticketNumber: string;
@@ -32,6 +43,13 @@ export interface Ticket {
   closedAt?: string;
   createdAt: string;
   updatedAt: string;
+  slaTracking?: SlaTracking | null;
+  customer?: { id: string; name: string };
+  system?: { id: string; name: string };
+  category?: { id: string; name: string };
+  assignee?: { id: string; firstName: string; lastName: string; email: string };
+  createdBy?: { id: string; firstName: string; lastName: string; email: string };
+  team?: { id: string; name: string };
 }
 
 export interface CreateTicketDto {

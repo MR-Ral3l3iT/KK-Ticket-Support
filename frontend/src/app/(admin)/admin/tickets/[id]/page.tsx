@@ -14,6 +14,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
 import { Divider } from '@/components/ui/Divider';
 import { Toggle } from '@/components/ui/Toggle';
+import { SlaCountdown } from '@/components/ui/SlaCountdown';
 import { useApi } from '@/lib/hooks/useApi';
 import { adminTicketsApi } from '@/lib/api/admin-tickets';
 import { usersApi } from '@/lib/api/users';
@@ -232,19 +233,21 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
             {t.slaTracking && (
               <Card>
                 <CardHeader><CardTitle>SLA</CardTitle></CardHeader>
-                <div className="flex flex-col gap-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">First Response</span>
-                    <Badge variant={t.slaTracking.isFirstResponseBreached ? 'danger' : 'success'}>
-                      {t.slaTracking.isFirstResponseBreached ? 'เกินกำหนด' : 'ตามกำหนด'}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Resolution</span>
-                    <Badge variant={t.slaTracking.isResolutionBreached ? 'danger' : 'success'}>
-                      {t.slaTracking.isResolutionBreached ? 'เกินกำหนด' : 'ตามกำหนด'}
-                    </Badge>
-                  </div>
+                <div className="flex flex-col divide-y divide-gray-100">
+                  <SlaCountdown
+                    label="First Response"
+                    dueAt={t.slaTracking.firstResponseDue}
+                    completedAt={t.slaTracking.firstResponseAt}
+                    isBreached={t.slaTracking.isFirstResponseBreached}
+                    isPaused={!!t.slaTracking.pausedAt}
+                  />
+                  <SlaCountdown
+                    label="Resolution"
+                    dueAt={t.slaTracking.resolutionDue}
+                    completedAt={t.slaTracking.resolutionAt}
+                    isBreached={t.slaTracking.isResolutionBreached}
+                    isPaused={!!t.slaTracking.pausedAt}
+                  />
                 </div>
               </Card>
             )}

@@ -1,9 +1,10 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Param, Query, Res, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
 import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TicketStatus, TicketPriority, UserRole } from '@prisma/client';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Response } from 'express';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -68,7 +69,7 @@ export class ReportsController {
   @Roles(...SUPPORT_ROLES)
   @ApiOperation({ summary: 'ดู Dashboard ภาพรวมระบบ', description: 'สรุป KPI: จำนวน Ticket, สถานะ, Priority, SLA breach' })
   @ApiResponse({ status: 200, description: 'ดึงข้อมูล Dashboard สำเร็จ' })
-  getDashboard(@CurrentUser() user: { role: UserRole; customerId?: string }) {
+  getDashboard(@CurrentUser() _user: { role: UserRole; customerId?: string }) {
     return this.reportsService.getDashboard();
   }
 
@@ -76,7 +77,7 @@ export class ReportsController {
   @Roles(...SUPPORT_ROLES)
   @ApiOperation({ summary: 'ดู Dashboard ของลูกค้าที่เลือก' })
   @ApiResponse({ status: 200, description: 'ดึงข้อมูล Dashboard สำเร็จ' })
-  getCustomerDashboard(@Query('id') customerId: string) {
+  getCustomerDashboard(@Param('id') customerId: string) {
     return this.reportsService.getDashboard(customerId);
   }
 
@@ -98,5 +99,28 @@ export class ReportsController {
     @Query('limit') limit?: number,
   ) {
     return this.reportsService.getSlaBreachReport({ customerId, page, limit });
+  }
+
+  @Get('admin/dashboard/chart-data')
+  @Roles(...SUPPORT_ROLES)
+  @ApiOperation({ summary: 'ข้อมูล Chart สำหรับ Dashboard' })
+  @ApiResponse({ status: 200, description: 'ดึงข้อมูล Chart สำเร็จ' })
+  getChartData(@Query('customerId') customerId?: string) {
+    return this.reportsService.getChartData(customerId);
+  }
+
+  @Get('reports/export/csv')
+  @Roles(...SUPPORT_ROLES)
+  @ApiOperation({ summary: 'Export รายงาน Ticket เป็น CSV' })
+  @ApiResponse({ status: 200, description: 'ไฟล์ CSV' })
+  async exportCsv(
+    @Query() filter: TicketReportFilterDto,
+    @Res() res: Response,
+  ) {
+    const csv = await this.reportsService.exportTicketsCsv(filter);
+    const filename = `tickets_${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send('﻿' + csv);
   }
 }
