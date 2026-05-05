@@ -1,6 +1,7 @@
-import { api } from './client';
+import { api, apiUpload } from './client';
 import { Ticket } from '@/types/ticket.types';
 import { PaginatedResponse } from '@/types/api.types';
+import { Attachment } from './customer-portal';
 
 export const adminTicketsApi = {
   list: (params?: Record<string, string>) => {
@@ -17,4 +18,13 @@ export const adminTicketsApi = {
   getTimeline: (id: string) => api.get(`/api/admin/tickets/${id}/timeline`),
   addComment: (id: string, content: string, type: 'PUBLIC' | 'INTERNAL') =>
     api.post(`/api/admin/tickets/${id}/comments`, { content, type }),
+  getAttachments: (ticketId: string) =>
+    api.get<Attachment[]>(`/api/tickets/${ticketId}/attachments`),
+  uploadAttachments: (ticketId: string, files: File[], commentId?: string) => {
+    const fd = new FormData();
+    files.forEach((f) => fd.append('files', f));
+    const q = commentId ? `?commentId=${commentId}` : '';
+    return apiUpload<Attachment[]>(`/api/tickets/${ticketId}/attachments${q}`, fd);
+  },
+  deleteAttachment: (id: string) => api.delete(`/api/attachments/${id}`),
 };

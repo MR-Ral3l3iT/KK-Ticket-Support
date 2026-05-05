@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Send, UserCheck, ArrowRightLeft, Ticket } from 'lucide-react';
+import { ChevronLeft, Send, UserCheck, ArrowRightLeft, Ticket, Paperclip } from 'lucide-react';
 import { AdminHeader } from '@/components/layout/AdminHeader';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge, BadgeVariant } from '@/components/ui/Badge';
@@ -15,8 +15,10 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Divider } from '@/components/ui/Divider';
 import { Toggle } from '@/components/ui/Toggle';
 import { SlaCountdown } from '@/components/ui/SlaCountdown';
+import { FileUploader } from '@/components/tickets/FileUploader';
 import { useApi } from '@/lib/hooks/useApi';
 import { adminTicketsApi } from '@/lib/api/admin-tickets';
+import { Attachment } from '@/lib/api/customer-portal';
 import { usersApi } from '@/lib/api/users';
 import { useToast } from '@/components/ui/Toast';
 import { TicketStatus, TicketPriority } from '@/types/ticket.types';
@@ -56,12 +58,17 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
   const { toast } = useToast();
   const { data: ticket, loading, reload } = useApi(() => adminTicketsApi.get(params.id), [params.id]);
   const { data: timeline, reload: reloadTimeline } = useApi(() => adminTicketsApi.getTimeline(params.id), [params.id]);
+  const { data: attachments, reload: reloadAttachments } = useApi(
+    () => adminTicketsApi.getAttachments(params.id),
+    [params.id],
+  );
   const { data: agentsData } = useApi(() => usersApi.list({ role: 'SUPPORT_AGENT', limit: '100' }), []);
 
   const agentOptions = [{ value: '', label: '-- ไม่ assign --' }, ...(agentsData?.data ?? []).map((u) => ({ value: u.id, label: `${u.firstName} ${u.lastName}` }))];
 
   const [commentText, setCommentText] = useState('');
   const [isInternal, setIsInternal] = useState(false);
+  const [commentFiles, setCommentFiles] = useState<File[]>([]);
   const [sendingComment, setSendingComment] = useState(false);
 
   const [statusModalOpen, setStatusModalOpen] = useState(false);
@@ -77,7 +84,16 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
     if (!commentText.trim()) return;
     setSendingComment(true);
     try {
-      await adminTicketsApi.addComment(params.id, commentText.trim(), isInternal ? 'INTERNAL' : 'PUBLIC');
+      const comment = await adminTicketsApi.addComment(
+        params.id,
+        commentText.trim(),
+        isInternal ? 'INTERNAL' : 'PUBLIC',
+      );
+      if (commentFiles.length > 0) {
+        await adminTicketsApi.uploadAttachments(params.id, commentFiles, (comment as any).id);
+        setCommentFiles([]);
+        reloadAttachments();
+      }
       setCommentText('');
       reloadTimeline();
       toast.success('เพิ่มความคิดเห็นสำเร็จ');
@@ -108,6 +124,27 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
     finally { setAssigning(false); }
   }
 
+  async function handleDeleteAttachment(attachmentId: string) {
+    try {
+      await adminTicketsApi.deleteAttachment(attachmentId);
+      reloadAttachments();
+      toast.success('ลบไฟล์แนบสำเร็จ');
+    } catch {
+      toast.error('ลบไฟล์แนบไม่สำเร็จ');
+    }
+  }
+
+  function handleCommentFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    if (!selected.length) return;
+    setCommentFiles((prev) => [...prev, ...selected]);
+    e.target.value = '';
+  }
+
+  function removeCommentFile(index: number) {
+    setCommentFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
   if (loading) return <><AdminHeader title="Ticket Detail" /><div className="pt-20 p-6 flex justify-center"><Spinner size="lg" /></div></>;
   if (!ticket) return null;
 
@@ -115,6 +152,15 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
   const sb = STATUS_BADGE[ticket.status];
   const pb = PRIORITY_BADGE[ticket.priority];
   const transitions = TRANSITION_OPTIONS[ticket.status] ?? [];
+  const attachmentsByCommentId = ((attachments as Attachment[]) ?? []).reduce(
+    (acc, att) => {
+      if (!att.commentId) return acc;
+      if (!acc[att.commentId]) acc[att.commentId] = [];
+      acc[att.commentId].push(att);
+      return acc;
+    },
+    {} as Record<string, Attachment[]>,
+  );
 
   return (
     <>
@@ -145,6 +191,24 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
               <p className="text-gray-700 whitespace-pre-wrap">{ticket.description}</p>
             </Card>
 
+            {/* Attachments */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Paperclip className="h-4 w-4" />
+                  ไฟล์แนบ
+                </CardTitle>
+              </CardHeader>
+              <FileUploader
+                ticketId={params.id}
+                existingAttachments={(attachments as Attachment[]) ?? []}
+                canDeleteExisting
+                onDeleteExisting={handleDeleteAttachment}
+                onUploaded={() => reloadAttachments()}
+                uploadFn={adminTicketsApi.uploadAttachments}
+              />
+            </Card>
+
             {/* Timeline */}
             <Card>
               <CardHeader><CardTitle>Timeline</CardTitle></CardHeader>
@@ -161,7 +225,25 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
                         {item.timelineType === 'comment' && item.type === 'INTERNAL' && <Badge variant="warning" size="sm">Internal</Badge>}
                       </div>
                       {item.timelineType === 'comment' ? (
-                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{item.content}</p>
+                        <div className="flex flex-col gap-2">
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{item.content}</p>
+                          {attachmentsByCommentId[item.id]?.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {attachmentsByCommentId[item.id].map((att) => (
+                                <a
+                                  key={att.id}
+                                  href={att.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-primary hover:bg-primary-50"
+                                >
+                                  <Paperclip className="h-3.5 w-3.5" />
+                                  <span className="max-w-52 truncate">{att.fileName}</span>
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
                       ) : (
                         <p className="text-sm text-gray-500 italic">{item.action}{item.fromValue && ` (${item.fromValue} → ${item.toValue ?? '—'})`}</p>
                       )}
@@ -180,6 +262,33 @@ export default function AdminTicketDetailPage({ params }: { params: { id: string
                   <Toggle checked={isInternal} onChange={setIsInternal} label="Internal Note" size="sm" />
                 </div>
                 <Textarea placeholder={isInternal ? 'บันทึกภายใน (ลูกค้าไม่เห็น)...' : 'ตอบกลับลูกค้า...'} value={commentText} onChange={(e) => setCommentText(e.target.value)} rows={3} />
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50">
+                      <Paperclip className="h-3.5 w-3.5" />
+                      แนบไฟล์กับข้อความนี้
+                      <input type="file" multiple className="hidden" onChange={handleCommentFilesSelected} />
+                    </label>
+                    {isInternal && (
+                      <span className="text-xs text-amber-600">ไฟล์ใน Internal Note ลูกค้าไม่ควรเข้าถึง</span>
+                    )}
+                  </div>
+                  {commentFiles.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {commentFiles.map((f, idx) => (
+                        <button
+                          key={`${f.name}-${idx}`}
+                          type="button"
+                          onClick={() => removeCommentFile(idx)}
+                          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                        >
+                          <span className="max-w-52 truncate">{f.name}</span>
+                          <span className="text-gray-400">x</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div className="flex justify-end">
                   <Button size="sm" leftIcon={<Send className="h-4 w-4" />} loading={sendingComment} onClick={handleSendComment} disabled={!commentText.trim()}>
                     {isInternal ? 'บันทึก Internal' : 'ส่ง'}

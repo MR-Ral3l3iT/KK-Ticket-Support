@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { CommentType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { StorageService } from './storage.service';
@@ -88,9 +88,20 @@ export class AttachmentsService {
     return { url, fileName: attachment.fileName, mimeType: attachment.mimeType };
   }
 
-  async findByTicket(ticketId: string) {
+  async findByTicket(ticketId: string, actorRole: UserRole) {
+    const isCustomer =
+      actorRole === UserRole.CUSTOMER_ADMIN || actorRole === UserRole.CUSTOMER_USER;
+
     const attachments = await this.prisma.attachment.findMany({
-      where: { ticketId, deletedAt: null },
+      where: {
+        ticketId,
+        deletedAt: null,
+        ...(isCustomer
+          ? {
+              OR: [{ commentId: null }, { comment: { type: CommentType.PUBLIC } }],
+            }
+          : {}),
+      },
       select: ATTACHMENT_SELECT,
       orderBy: { createdAt: 'asc' },
     });

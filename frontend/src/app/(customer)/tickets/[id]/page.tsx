@@ -197,7 +197,13 @@ export default function CustomerTicketDetailPage({ params }: { params: { id: str
   const isClosed = ['CLOSED', 'CANCELLED'].includes(ticket.status);
   const timelineEvents = ((timeline as any[]) ?? []).filter((ev) => {
     if (ev.timelineType === 'comment') return ev.type === 'PUBLIC';
-    if (ev.timelineType === 'audit') return ev.action !== 'COMMENT_ADDED';
+    if (ev.timelineType === 'audit') {
+      // ซ่อนกิจกรรมภายในทีม support จากมุมมองลูกค้า
+      if (['COMMENT_ADDED', 'ASSIGNEE_CHANGED', 'TEAM_CHANGED'].includes(ev.action)) {
+        return false;
+      }
+      return true;
+    }
     return true;
   });
 

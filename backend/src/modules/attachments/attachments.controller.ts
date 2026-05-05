@@ -93,8 +93,11 @@ export class AttachmentsController {
   @ApiOperation({ summary: 'ดูรายการไฟล์แนบของ Ticket (พร้อม URL)' })
   @ApiParam({ name: 'ticketId', description: 'รหัส Ticket' })
   @ApiResponse({ status: 200 })
-  findByTicket(@Param('ticketId') ticketId: string) {
-    return this.attachmentsService.findByTicket(ticketId);
+  findByTicket(
+    @Param('ticketId') ticketId: string,
+    @CurrentUser() user: { role: UserRole },
+  ) {
+    return this.attachmentsService.findByTicket(ticketId, user.role);
   }
 
   @Delete('attachments/:id')

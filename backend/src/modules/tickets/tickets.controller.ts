@@ -94,7 +94,10 @@ export class TicketsController {
   @ApiOperation({ summary: 'ดู Timeline ของ Ticket', description: 'แสดงประวัติการเปลี่ยนสถานะ + Comment (PUBLIC เท่านั้น) เรียงตามเวลา' })
   @ApiParam({ name: 'id', description: 'รหัส Ticket' })
   @ApiResponse({ status: 200, description: 'ดึง Timeline สำเร็จ' })
-  getTimeline(@Param('id') id: string) {
-    return this.ticketsService.getTimeline(id);
+  getTimeline(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: UserRole; customerId: string },
+  ) {
+    return this.ticketsService.getTimelineAsCustomer(id, user.id, user.customerId, user.role);
   }
 }

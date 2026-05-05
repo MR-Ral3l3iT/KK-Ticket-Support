@@ -207,6 +207,26 @@ export class TicketsService {
     ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 
+  async getTimelineAsCustomer(
+    id: string,
+    actorId: string,
+    customerId: string,
+    role: UserRole,
+  ) {
+    await this.findOneAsCustomer(id, actorId, customerId, role);
+    const timeline = await this.getTimeline(id);
+
+    return timeline.filter((item) => {
+      if (item.timelineType === 'comment') {
+        return item.type === 'PUBLIC';
+      }
+      if (item.timelineType === 'audit') {
+        return !['COMMENT_ADDED', 'ASSIGNEE_CHANGED', 'TEAM_CHANGED'].includes(item.action);
+      }
+      return true;
+    });
+  }
+
   // ─── Admin ────────────────────────────────────────────────────
 
   async findAll(
