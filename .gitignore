@@ -27,6 +27,9 @@ pnpm-debug.log*
 .idea/
 .vscode/
 
+# Secrets (e.g. Firebase service account JSON under repo keys/)
+keys/*.json
+
 # Runtime files
 tmp/
 temp/

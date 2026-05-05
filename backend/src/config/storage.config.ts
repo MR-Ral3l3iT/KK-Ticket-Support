@@ -7,4 +7,9 @@ export default registerAs('storage', () => ({
   bucket: process.env.STORAGE_BUCKET,
   region: process.env.STORAGE_REGION ?? 'ap-southeast-1',
   presignedUrlExpires: parseInt(process.env.STORAGE_PRESIGNED_URL_EXPIRES ?? '3600', 10),
+  /** local | firebase */
+  provider: (process.env.ATTACHMENT_STORAGE ?? 'local').toLowerCase(),
+  firebaseBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  firebaseCredentialPath:
+    process.env.GOOGLE_APPLICATION_CREDENTIALS ?? process.env.FIREBASE_SERVICE_ACCOUNT_PATH,
 }));

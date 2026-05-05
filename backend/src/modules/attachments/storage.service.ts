@@ -1,9 +1,18 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { mkdir, writeFile, unlink } from 'fs/promises';
-import { join } from 'path';
+import { readFileSync } from 'fs';
+import { isAbsolute, join, resolve } from 'path';
 import { randomBytes } from 'crypto';
 import * as sharp from 'sharp';
+import * as admin from 'firebase-admin';
+import type { Bucket } from '@google-cloud/storage';
 
 const ALLOWED_MIME_TYPES = [
   'image/jpeg',
@@ -32,14 +41,85 @@ export interface UploadResult {
   fileSize: number;
 }
 
+type StorageProvider = 'local' | 'firebase';
+
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit {
+  private readonly logger = new Logger(StorageService.name);
   private readonly uploadDir: string;
   private readonly baseUrl: string;
+  private readonly provider: StorageProvider;
+  private readonly presignedUrlExpiresSec: number;
+  private firebaseBucket: Bucket | null = null;
 
   constructor(private configService: ConfigService) {
     this.uploadDir = join(process.cwd(), 'uploads');
     this.baseUrl = configService.get<string>('BACKEND_URL') ?? 'http://localhost:3001';
+    const raw = (configService.get<string>('storage.provider') ?? 'local').toLowerCase();
+    this.provider = raw === 'firebase' ? 'firebase' : 'local';
+    this.presignedUrlExpiresSec =
+      configService.get<number>('storage.presignedUrlExpires') ?? 3600;
+  }
+
+  onModuleInit() {
+    if (this.provider === 'firebase') {
+      this.initFirebase();
+    }
+  }
+
+  private resolveCredentialPath(raw: string): string {
+    return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+  }
+
+  private initFirebase(): void {
+    const credPath =
+      this.configService.get<string>('storage.firebaseCredentialPath') ??
+      process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    let bucketName = this.configService.get<string>('storage.firebaseBucket') ?? undefined;
+
+    if (!credPath?.trim()) {
+      throw new InternalServerErrorException(
+        'ATTACHMENT_STORAGE=firebase ต้องตั้ง GOOGLE_APPLICATION_CREDENTIALS หรือ FIREBASE_SERVICE_ACCOUNT_PATH',
+      );
+    }
+
+    const resolved = this.resolveCredentialPath(credPath.trim());
+    let serviceAccount: admin.ServiceAccount & { project_id?: string };
+    try {
+      serviceAccount = JSON.parse(readFileSync(resolved, 'utf8'));
+    } catch {
+      throw new InternalServerErrorException(`อ่าน Firebase service account ไม่ได้: ${resolved}`);
+    }
+
+    if (!bucketName?.trim() && serviceAccount.project_id) {
+      bucketName = `${serviceAccount.project_id}.appspot.com`;
+      this.logger.log(`ไม่ได้ตั้ง FIREBASE_STORAGE_BUCKET — ใช้ค่าเริ่มต้น ${bucketName}`);
+    }
+
+    if (!bucketName?.trim()) {
+      throw new InternalServerErrorException(
+        'ต้องตั้ง FIREBASE_STORAGE_BUCKET หรือให้ไฟล์ credential มี project_id',
+      );
+    }
+
+    const name = bucketName.trim();
+
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        storageBucket: name,
+      });
+    }
+
+    this.firebaseBucket = admin.storage().bucket(name);
+    this.logger.log(`Firebase Storage พร้อมใช้งาน (bucket: ${name})`);
+  }
+
+  private getBucket(): Bucket {
+    if (!this.firebaseBucket) {
+      this.initFirebase();
+    }
+    return this.firebaseBucket!;
   }
 
   validateFiles(files: Express.Multer.File[]) {
@@ -68,12 +148,8 @@ export class StorageService {
     const year = now.getFullYear().toString();
     const month = String(now.getMonth() + 1).padStart(2, '0');
 
-    // Sanitize path segments to prevent directory traversal
     const customerCode = ctx.customerCode.replace(/[^a-zA-Z0-9_-]/g, '_');
     const ticketNumber = ctx.ticketNumber.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-    const subDir = join(this.uploadDir, customerCode, year, month, ticketNumber);
-    await mkdir(subDir, { recursive: true });
 
     const uid = randomBytes(8).toString('hex');
     const isImage = IMAGE_MIME_TYPES.has(file.mimetype);
@@ -83,9 +159,7 @@ export class StorageService {
     let finalMimeType: string;
 
     if (isImage) {
-      buffer = await sharp(file.buffer)
-        .webp({ quality: 82 })
-        .toBuffer();
+      buffer = await sharp(file.buffer).webp({ quality: 82 }).toBuffer();
       ext = 'webp';
       finalMimeType = 'image/webp';
     } else {
@@ -96,17 +170,42 @@ export class StorageService {
 
     const filename = `${uid}.${ext}`;
     const storageKey = `${customerCode}/${year}/${month}/${ticketNumber}/${filename}`;
-    await writeFile(join(subDir, filename), buffer);
+
+    if (this.provider === 'firebase') {
+      const bucket = this.getBucket();
+      await bucket.file(storageKey).save(buffer, {
+        metadata: { contentType: finalMimeType },
+        resumable: false,
+      });
+    } else {
+      const subDir = join(this.uploadDir, customerCode, year, month, ticketNumber);
+      await mkdir(subDir, { recursive: true });
+      await writeFile(join(subDir, filename), buffer);
+    }
 
     return { storageKey, mimeType: finalMimeType, fileSize: buffer.length };
   }
 
   async getUrl(storageKey: string): Promise<string> {
-    // Phase 1: local static URL  |  Phase 2: presigned S3/MinIO URL (1 hour TTL)
+    if (this.provider === 'firebase') {
+      const [url] = await this.getBucket().file(storageKey).getSignedUrl({
+        action: 'read',
+        expires: Date.now() + this.presignedUrlExpiresSec * 1000,
+      });
+      return url;
+    }
     return `${this.baseUrl}/api/files/${storageKey}`;
   }
 
   async delete(storageKey: string): Promise<void> {
+    if (this.provider === 'firebase') {
+      try {
+        await this.getBucket().file(storageKey).delete({ ignoreNotFound: true });
+      } catch {
+        // object may already be gone
+      }
+      return;
+    }
     try {
       await unlink(join(this.uploadDir, ...storageKey.split('/')));
     } catch {
