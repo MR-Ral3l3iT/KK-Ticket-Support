@@ -1,5 +1,37 @@
-import { IsBoolean, IsDateString, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+
+export class SlaMinutesDto {
+  @ApiProperty()
+  @IsInt()
+  @Min(1)
+  LOW: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(1)
+  MEDIUM: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(1)
+  HIGH: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(1)
+  CRITICAL: number;
+}
 
 export class CreateContractDto {
   @ApiProperty({ description: 'รหัสลูกค้าที่สัญญานี้สังกัดอยู่' })
@@ -39,4 +71,14 @@ export class CreateContractDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @ApiProperty({ type: SlaMinutesDto, description: 'SLA เวลาตอบกลับครั้งแรก (นาที) แยกตาม priority' })
+  @ValidateNested()
+  @Type(() => SlaMinutesDto)
+  slaFirstResponseMinutes: SlaMinutesDto;
+
+  @ApiProperty({ type: SlaMinutesDto, description: 'SLA เวลาปิดงาน (นาที) แยกตาม priority' })
+  @ValidateNested()
+  @Type(() => SlaMinutesDto)
+  slaResolutionMinutes: SlaMinutesDto;
 }

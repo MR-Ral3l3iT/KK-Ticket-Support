@@ -1,9 +1,30 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, TicketPriority } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ContractFilterDto } from './dto/contract-filter.dto';
-import { CreateContractDto } from './dto/create-contract.dto';
+import { CreateContractDto, SlaMinutesDto } from './dto/create-contract.dto';
 import { UpdateContractDto } from './dto/update-contract.dto';
+
+const PRIORITIES: TicketPriority[] = [
+  TicketPriority.LOW,
+  TicketPriority.MEDIUM,
+  TicketPriority.HIGH,
+  TicketPriority.CRITICAL,
+];
+
+const DEFAULT_SLA_FIRST_RESPONSE: SlaMinutesDto = {
+  LOW: 480,
+  MEDIUM: 240,
+  HIGH: 60,
+  CRITICAL: 30,
+};
+
+const DEFAULT_SLA_RESOLUTION: SlaMinutesDto = {
+  LOW: 2880,
+  MEDIUM: 1440,
+  HIGH: 480,
+  CRITICAL: 240,
+};
 
 const CONTRACT_SELECT = {
   id: true,
@@ -19,6 +40,10 @@ const CONTRACT_SELECT = {
   systemId: true,
   customer: { select: { id: true, name: true, code: true } },
   system: { select: { id: true, name: true, code: true } },
+  slaPolicies: {
+    where: { isActive: true },
+    select: { priority: true, firstResponseMinutes: true, resolutionMinutes: true, businessHoursOnly: true },
+  },
   _count: { select: { slaPolicies: true, categoryScopes: true } },
 } as const;
 
@@ -53,22 +78,22 @@ export class ContractsService {
       this.prisma.contract.count({ where }),
     ]);
 
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      data: data.map((contract) => this.withSlaMaps(contract)),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async findOne(id: string) {
     const contract = await this.prisma.contract.findFirst({
       where: { id, deletedAt: null },
-      select: {
-        ...CONTRACT_SELECT,
-        slaPolicies: {
-          select: { id: true, priority: true, firstResponseMinutes: true, resolutionMinutes: true, businessHoursOnly: true, isActive: true },
-          where: { isActive: true },
-        },
-      },
+      select: CONTRACT_SELECT,
     });
     if (!contract) throw new NotFoundException('ไม่พบข้อมูลสัญญา');
-    return contract;
+    return this.withSlaMaps(contract);
   }
 
   async create(dto: CreateContractDto) {
@@ -79,7 +104,7 @@ export class ContractsService {
     const existing = await this.prisma.contract.findUnique({ where: { contractNumber: dto.contractNumber } });
     if (existing) throw new ConflictException('เลขที่สัญญานี้ถูกใช้งานแล้ว');
 
-    return this.prisma.contract.create({
+    const contract = await this.prisma.contract.create({
       data: {
         customerId: dto.customerId,
         systemId: dto.systemId,
@@ -90,8 +115,16 @@ export class ContractsService {
         renewedFromId: dto.renewedFromId,
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
-      select: CONTRACT_SELECT,
+      select: { id: true },
     });
+
+    await this.upsertSlaPolicies(
+      contract.id,
+      dto.slaFirstResponseMinutes ?? DEFAULT_SLA_FIRST_RESPONSE,
+      dto.slaResolutionMinutes ?? DEFAULT_SLA_RESOLUTION,
+    );
+
+    return this.findOne(contract.id);
   }
 
   async update(id: string, dto: UpdateContractDto) {
@@ -117,7 +150,33 @@ export class ContractsService {
       ...(dto.renewedFromId !== undefined && { renewedFromId: dto.renewedFromId }),
     };
 
-    return this.prisma.contract.update({ where: { id }, data, select: CONTRACT_SELECT });
+    await this.prisma.contract.update({ where: { id }, data, select: { id: true } });
+
+    if (dto.slaFirstResponseMinutes || dto.slaResolutionMinutes) {
+      const current = await this.prisma.slaPolicy.findMany({
+        where: { contractId: id, isActive: true },
+        select: { priority: true, firstResponseMinutes: true, resolutionMinutes: true },
+      });
+
+      const currentFirst = this.mapSlaFromPolicies(
+        current,
+        'firstResponseMinutes',
+        DEFAULT_SLA_FIRST_RESPONSE,
+      );
+      const currentResolution = this.mapSlaFromPolicies(
+        current,
+        'resolutionMinutes',
+        DEFAULT_SLA_RESOLUTION,
+      );
+
+      await this.upsertSlaPolicies(
+        id,
+        dto.slaFirstResponseMinutes ?? currentFirst,
+        dto.slaResolutionMinutes ?? currentResolution,
+      );
+    }
+
+    return this.findOne(id);
   }
 
   async remove(id: string) {
@@ -126,5 +185,90 @@ export class ContractsService {
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     });
+  }
+
+  private mapSlaFromPolicies(
+    policies: Array<{ priority: TicketPriority; firstResponseMinutes: number; resolutionMinutes: number }>,
+    key: 'firstResponseMinutes' | 'resolutionMinutes',
+    fallback: SlaMinutesDto,
+  ): SlaMinutesDto {
+    return {
+      LOW: policies.find((p) => p.priority === TicketPriority.LOW)?.[key] ?? fallback.LOW,
+      MEDIUM:
+        policies.find((p) => p.priority === TicketPriority.MEDIUM)?.[key] ??
+        fallback.MEDIUM,
+      HIGH: policies.find((p) => p.priority === TicketPriority.HIGH)?.[key] ?? fallback.HIGH,
+      CRITICAL:
+        policies.find((p) => p.priority === TicketPriority.CRITICAL)?.[key] ??
+        fallback.CRITICAL,
+    };
+  }
+
+  private async upsertSlaPolicies(
+    contractId: string,
+    firstResponse: SlaMinutesDto,
+    resolution: SlaMinutesDto,
+  ) {
+    await this.prisma.$transaction(
+      PRIORITIES.map((priority) =>
+        this.prisma.slaPolicy.upsert({
+          where: { contractId_priority: { contractId, priority } },
+          update: {
+            firstResponseMinutes: firstResponse[priority],
+            resolutionMinutes: resolution[priority],
+            isActive: true,
+          },
+          create: {
+            contractId,
+            priority,
+            firstResponseMinutes: firstResponse[priority],
+            resolutionMinutes: resolution[priority],
+            businessHoursOnly: true,
+            isActive: true,
+          },
+        }),
+      ),
+    );
+  }
+
+  private withSlaMaps(
+    contract: Prisma.ContractGetPayload<{ select: typeof CONTRACT_SELECT }>,
+  ) {
+    const firstResponse = {
+      LOW:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.LOW)?.firstResponseMinutes ??
+        DEFAULT_SLA_FIRST_RESPONSE.LOW,
+      MEDIUM:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.MEDIUM)?.firstResponseMinutes ??
+        DEFAULT_SLA_FIRST_RESPONSE.MEDIUM,
+      HIGH:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.HIGH)?.firstResponseMinutes ??
+        DEFAULT_SLA_FIRST_RESPONSE.HIGH,
+      CRITICAL:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.CRITICAL)?.firstResponseMinutes ??
+        DEFAULT_SLA_FIRST_RESPONSE.CRITICAL,
+    };
+
+    const resolution = {
+      LOW:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.LOW)?.resolutionMinutes ??
+        DEFAULT_SLA_RESOLUTION.LOW,
+      MEDIUM:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.MEDIUM)?.resolutionMinutes ??
+        DEFAULT_SLA_RESOLUTION.MEDIUM,
+      HIGH:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.HIGH)?.resolutionMinutes ??
+        DEFAULT_SLA_RESOLUTION.HIGH,
+      CRITICAL:
+        contract.slaPolicies.find((p) => p.priority === TicketPriority.CRITICAL)?.resolutionMinutes ??
+        DEFAULT_SLA_RESOLUTION.CRITICAL,
+    };
+
+    return {
+      ...contract,
+      slaFirstResponseMinutes: firstResponse,
+      slaResolutionMinutes: resolution,
+      businessHoursOnly: contract.slaPolicies.every((p) => p.businessHoursOnly),
+    };
   }
 }

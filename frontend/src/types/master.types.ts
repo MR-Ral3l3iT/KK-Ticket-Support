@@ -34,6 +34,7 @@ export interface SlaMinutes {
 
 export interface Contract {
   id: string;
+  contractNumber: string;
   name: string;
   customerId: string;
   systemId: string;

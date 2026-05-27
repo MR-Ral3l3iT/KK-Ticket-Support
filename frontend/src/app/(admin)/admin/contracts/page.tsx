@@ -21,13 +21,13 @@ import { useToast } from '@/components/ui/Toast';
 import { Contract } from '@/types/master.types';
 
 interface ContractForm {
-  name: string; customerId: string; systemId: string;
+  contractNumber: string; name: string; customerId: string; systemId: string;
   startDate: string; endDate: string; isActive: boolean;
   frLow: string; frMedium: string; frHigh: string; frCritical: string;
   resLow: string; resMedium: string; resHigh: string; resCritical: string;
 }
 const emptyForm: ContractForm = {
-  name: '', customerId: '', systemId: '', startDate: '', endDate: '', isActive: true,
+  contractNumber: '', name: '', customerId: '', systemId: '', startDate: '', endDate: '', isActive: true,
   frLow: '480', frMedium: '240', frHigh: '60', frCritical: '30',
   resLow: '2880', resMedium: '1440', resHigh: '480', resCritical: '240',
 };
@@ -62,7 +62,7 @@ export default function AdminContractsPage() {
   function openForm(c: Contract | null) {
     setEditTarget(c);
     setForm(c ? {
-      name: c.name, customerId: c.customerId, systemId: c.systemId,
+      contractNumber: c.contractNumber, name: c.name, customerId: c.customerId, systemId: c.systemId,
       startDate: c.startDate.slice(0, 10), endDate: c.endDate.slice(0, 10),
       isActive: c.isActive,
       frLow: String(c.slaFirstResponseMinutes.LOW),
@@ -86,6 +86,7 @@ export default function AdminContractsPage() {
 
   function validate() {
     const e: Partial<Record<keyof ContractForm, string>> = {};
+    if (!form.contractNumber.trim()) e.contractNumber = 'กรุณากรอกเลขที่สัญญา';
     if (!form.name) e.name = 'กรุณากรอกชื่อสัญญา';
     if (!form.customerId) e.customerId = 'กรุณาเลือกลูกค้า';
     if (!form.systemId) e.systemId = 'กรุณาเลือกระบบ';
@@ -100,6 +101,7 @@ export default function AdminContractsPage() {
     setSaving(true);
     try {
       const payload = {
+        contractNumber: form.contractNumber.trim(),
         name: form.name, customerId: form.customerId, systemId: form.systemId,
         startDate: form.startDate, endDate: form.endDate, isActive: form.isActive,
         slaFirstResponseMinutes: { LOW: +form.frLow, MEDIUM: +form.frMedium, HIGH: +form.frHigh, CRITICAL: +form.frCritical },
@@ -153,10 +155,11 @@ export default function AdminContractsPage() {
           : (
             <>
               <Table>
-                <TableHead><TableRow><TableTh>ชื่อสัญญา</TableTh><TableTh>ลูกค้า</TableTh><TableTh>ระบบ</TableTh><TableTh>วันเริ่มต้น</TableTh><TableTh>วันสิ้นสุด</TableTh><TableTh>สถานะ</TableTh><TableTh></TableTh></TableRow></TableHead>
+                <TableHead><TableRow><TableTh>เลขที่สัญญา</TableTh><TableTh>ชื่อสัญญา</TableTh><TableTh>ลูกค้า</TableTh><TableTh>ระบบ</TableTh><TableTh>วันเริ่มต้น</TableTh><TableTh>วันสิ้นสุด</TableTh><TableTh>สถานะ</TableTh><TableTh></TableTh></TableRow></TableHead>
                 <TableBody>
                   {data.data.map((c) => (
                     <TableRow key={c.id}>
+                      <TableTd className="font-mono text-xs text-gray-600">{c.contractNumber}</TableTd>
                       <TableTd className="font-medium">{c.name}</TableTd>
                       <TableTd className="text-gray-500">{c.customer?.name ?? '-'}</TableTd>
                       <TableTd className="text-gray-500">{c.system?.name ?? '-'}</TableTd>
@@ -182,7 +185,10 @@ export default function AdminContractsPage() {
       <Modal open={formOpen} onClose={() => setFormOpen(false)} size="xl" title={editTarget ? 'แก้ไขสัญญา' : 'เพิ่มสัญญาใหม่'}
         footer={<><Button variant="ghost" onClick={() => setFormOpen(false)} disabled={saving}>ยกเลิก</Button><Button loading={saving} onClick={handleSave}>บันทึก</Button></>}>
         <div className="flex flex-col gap-4">
-          <Input label="ชื่อสัญญา" value={form.name} onChange={(e) => setF('name', e.target.value)} error={errors.name} required />
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="เลขที่สัญญา" value={form.contractNumber} onChange={(e) => setF('contractNumber', e.target.value)} error={errors.contractNumber} required />
+            <Input label="ชื่อสัญญา" value={form.name} onChange={(e) => setF('name', e.target.value)} error={errors.name} required />
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <Select label="ลูกค้า" options={customerOptions} value={form.customerId} onChange={(e) => setF('customerId', e.target.value)} placeholder="-- เลือกลูกค้า --" error={errors.customerId} required />
             <Select label="ระบบ" options={systemOptions} value={form.systemId} onChange={(e) => setF('systemId', e.target.value)} placeholder="-- เลือกระบบ --" error={errors.systemId} required disabled={!form.customerId} />

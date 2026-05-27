@@ -17,8 +17,13 @@ import { systemsApi } from '@/lib/api/systems';
 import { useToast } from '@/components/ui/Toast';
 import { Category } from '@/types/master.types';
 
-interface CatForm { name: string; systemId: string; parentId: string; }
-const emptyForm: CatForm = { name: '', systemId: '', parentId: '' };
+interface CatForm {
+  name: string;
+  systemId: string;
+  parentId: string;
+  level: 'ROOT' | 'SUB';
+}
+const emptyForm: CatForm = { name: '', systemId: '', parentId: '', level: 'ROOT' };
 
 export default function AdminCategoriesPage() {
   const { toast } = useToast();
@@ -31,6 +36,10 @@ export default function AdminCategoriesPage() {
   );
   const { data: systemsData } = useApi(() => systemsApi.list({ limit: '200' }), []);
   const systemOptions = (systemsData?.data ?? []).map((s) => ({ value: s.id, label: `${s.name} (${s.code})` }));
+  const levelOptions = [
+    { value: 'ROOT', label: 'หมวดหมู่หลัก' },
+    { value: 'SUB', label: 'หมวดหมู่ย่อย' },
+  ];
 
   const [formOpen, setFormOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Category | null>(null);
@@ -39,20 +48,37 @@ export default function AdminCategoriesPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<CatForm>(emptyForm);
   const [errors, setErrors] = useState<Partial<CatForm>>({});
+  const { data: allCategoriesData } = useApi(
+    () => categoriesApi.list({ ...(form.systemId ? { systemId: form.systemId } : {}), limit: '200' }),
+    [form.systemId],
+  );
 
-  const parentOptions = (data?.data ?? [])
-    .filter((c) => c.systemId === form.systemId && (!editTarget || c.id !== editTarget.id))
+  const parentOptions = (allCategoriesData?.data ?? [])
+    .filter((c) => c.systemId === form.systemId && !c.parentId && (!editTarget || c.id !== editTarget.id))
     .map((c) => ({ value: c.id, label: c.name }));
 
   function openForm(c: Category | null) {
     setEditTarget(c);
-    setForm(c ? { name: c.name, systemId: c.systemId, parentId: c.parentId ?? '' } : emptyForm);
+    setForm(
+      c
+        ? {
+            name: c.name,
+            systemId: c.systemId,
+            parentId: c.parentId ?? '',
+            level: c.parentId ? 'SUB' : 'ROOT',
+          }
+        : emptyForm,
+    );
     setErrors({});
     setFormOpen(true);
   }
 
   function setF(key: keyof CatForm, val: string) {
-    setForm((f) => ({ ...f, [key]: val }));
+    setForm((f) => {
+      if (key === 'systemId') return { ...f, systemId: val, parentId: '' };
+      if (key === 'level') return { ...f, level: val as CatForm['level'], parentId: '' };
+      return { ...f, [key]: val };
+    });
     setErrors((e) => ({ ...e, [key]: undefined }));
   }
 
@@ -60,14 +86,23 @@ export default function AdminCategoriesPage() {
     const e: Partial<CatForm> = {};
     if (!form.name) e.name = 'กรุณากรอกชื่อหมวดหมู่';
     if (!form.systemId) e.systemId = 'กรุณาเลือกระบบ';
+    if (form.level === 'SUB' && !form.parentId) e.parentId = 'กรุณาเลือกหมวดหมู่หลัก';
     setErrors(e);
     if (Object.keys(e).length) return;
 
     setSaving(true);
     try {
-      const payload = { name: form.name, systemId: form.systemId, parentId: form.parentId || undefined };
-      if (editTarget) { await categoriesApi.update(editTarget.id, payload); toast.success('แก้ไขหมวดหมู่สำเร็จ'); }
-      else { await categoriesApi.create(payload); toast.success('เพิ่มหมวดหมู่สำเร็จ'); }
+      const basePayload = {
+        name: form.name,
+        parentId: form.level === 'SUB' ? form.parentId || undefined : 'root',
+      };
+      if (editTarget) {
+        await categoriesApi.update(editTarget.id, basePayload);
+        toast.success('แก้ไขหมวดหมู่สำเร็จ');
+      } else {
+        await categoriesApi.create({ ...basePayload, systemId: form.systemId });
+        toast.success('เพิ่มหมวดหมู่สำเร็จ');
+      }
       setFormOpen(false); reload();
     } catch (err) { toast.error('บันทึกไม่สำเร็จ', err instanceof Error ? err.message : undefined); }
     finally { setSaving(false); }
@@ -134,7 +169,24 @@ export default function AdminCategoriesPage() {
         <div className="flex flex-col gap-4">
           <Input label="ชื่อหมวดหมู่" value={form.name} onChange={(e) => setF('name', e.target.value)} error={errors.name} required />
           <Select label="ระบบ" options={systemOptions} value={form.systemId} onChange={(e) => setF('systemId', e.target.value)} placeholder="-- เลือกระบบ --" error={errors.systemId} required />
-          <Select label="หมวดหมู่แม่ (ถ้ามี)" options={parentOptions} value={form.parentId} onChange={(e) => setF('parentId', e.target.value)} placeholder="-- ไม่มี (root) --" disabled={!form.systemId} />
+          <Select
+            label="ประเภทหมวดหมู่"
+            options={levelOptions}
+            value={form.level}
+            onChange={(e) => setF('level', e.target.value)}
+          />
+          {form.level === 'SUB' && (
+            <Select
+              label="หมวดหมู่หลัก"
+              options={parentOptions}
+              value={form.parentId}
+              onChange={(e) => setF('parentId', e.target.value)}
+              placeholder="-- เลือกหมวดหมู่หลัก --"
+              error={errors.parentId}
+              disabled={!form.systemId}
+              required
+            />
+          )}
         </div>
       </Modal>
 

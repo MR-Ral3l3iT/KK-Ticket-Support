@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CategoryFilterDto } from './dto/category-filter.dto';
@@ -65,11 +65,27 @@ export class CategoriesService {
   }
 
   async create(dto: CreateCategoryDto) {
+    const parentId = dto.parentId === 'root' ? null : dto.parentId ?? null;
+
+    if (parentId) {
+      const parent = await this.prisma.category.findFirst({
+        where: { id: parentId, deletedAt: null },
+        select: { id: true, systemId: true, parentId: true },
+      });
+      if (!parent) throw new NotFoundException('ไม่พบหมวดหมู่หลักที่เลือก');
+      if (parent.systemId !== dto.systemId) {
+        throw new BadRequestException('หมวดหมู่หลักต้องอยู่ในระบบเดียวกัน');
+      }
+      if (parent.parentId) {
+        throw new BadRequestException('สามารถเลือกได้เฉพาะหมวดหมู่หลักเป็น Parent');
+      }
+    }
+
     const conflict = await this.prisma.category.findFirst({
       where: {
         systemId: dto.systemId,
         name: dto.name,
-        parentId: dto.parentId ?? null,
+        parentId,
         deletedAt: null,
       },
     });
@@ -80,7 +96,7 @@ export class CategoriesService {
         systemId: dto.systemId,
         name: dto.name,
         description: dto.description,
-        parentId: dto.parentId,
+        parentId,
       },
       select: CATEGORY_SELECT,
     });
@@ -88,13 +104,36 @@ export class CategoriesService {
 
   async update(id: string, dto: UpdateCategoryDto) {
     const category = await this.findOne(id);
+    const targetParentId =
+      dto.parentId === undefined
+        ? category.parentId
+        : dto.parentId === 'root'
+          ? null
+          : dto.parentId;
+
+    if (targetParentId) {
+      if (targetParentId === id) {
+        throw new BadRequestException('ไม่สามารถเลือกตัวเองเป็นหมวดหมู่หลักได้');
+      }
+      const parent = await this.prisma.category.findFirst({
+        where: { id: targetParentId, deletedAt: null },
+        select: { id: true, systemId: true, parentId: true },
+      });
+      if (!parent) throw new NotFoundException('ไม่พบหมวดหมู่หลักที่เลือก');
+      if (parent.systemId !== category.systemId) {
+        throw new BadRequestException('หมวดหมู่หลักต้องอยู่ในระบบเดียวกัน');
+      }
+      if (parent.parentId) {
+        throw new BadRequestException('สามารถเลือกได้เฉพาะหมวดหมู่หลักเป็น Parent');
+      }
+    }
 
     if (dto.name) {
       const conflict = await this.prisma.category.findFirst({
         where: {
           systemId: category.systemId,
           name: dto.name,
-          parentId: dto.parentId ?? category.parentId,
+          parentId: targetParentId,
           id: { not: id },
           deletedAt: null,
         },
@@ -102,9 +141,14 @@ export class CategoriesService {
       if (conflict) throw new ConflictException('ชื่อหมวดหมู่นี้มีอยู่แล้วภายในระดับเดียวกัน');
     }
 
+    const updateData: Prisma.CategoryUpdateInput = {
+      ...dto,
+      ...(dto.parentId !== undefined && { parentId: targetParentId }),
+    };
+
     return this.prisma.category.update({
       where: { id },
-      data: dto,
+      data: updateData,
       select: CATEGORY_SELECT,
     });
   }
