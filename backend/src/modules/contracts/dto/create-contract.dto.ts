@@ -1,4 +1,4 @@
-import { IsDateString, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsDateString, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateContractDto {
@@ -34,4 +34,9 @@ export class CreateContractDto {
   @IsString()
   @IsOptional()
   renewedFromId?: string;
+
+  @ApiPropertyOptional({ description: 'สถานะสัญญา (true = ยังมีผลบังคับใช้)' })
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
 }

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateSystemDto {
@@ -21,4 +21,9 @@ export class CreateSystemDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @ApiPropertyOptional({ description: 'สถานะการใช้งาน (true = เปิดใช้งาน)' })
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
 }

@@ -72,6 +72,7 @@ export class SystemsService {
         name: dto.name,
         code: dto.code,
         description: dto.description,
+        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
       select: SYSTEM_SELECT,
     });

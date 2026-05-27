@@ -88,6 +88,7 @@ export class ContractsService {
         startDate: new Date(dto.startDate),
         endDate: new Date(dto.endDate),
         renewedFromId: dto.renewedFromId,
+        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
       select: CONTRACT_SELECT,
     });
