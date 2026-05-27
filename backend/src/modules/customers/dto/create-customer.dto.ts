@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateCustomerDto {
@@ -11,6 +11,11 @@ export class CreateCustomerDto {
   @IsString()
   @IsNotEmpty()
   code: string;
+
+  @ApiPropertyOptional({ description: 'เลขประจำตัวผู้เสียภาษี' })
+  @IsString()
+  @IsOptional()
+  taxId?: string;
 
   @ApiPropertyOptional({ description: 'อีเมลติดต่อ' })
   @IsEmail()
@@ -26,4 +31,9 @@ export class CreateCustomerDto {
   @IsString()
   @IsOptional()
   address?: string;
+
+  @ApiPropertyOptional({ description: 'สถานะการใช้งาน (ค่าเริ่มต้น true)' })
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
 }

@@ -39,7 +39,7 @@ export class TicketsController {
     @Query() filter: TicketFilterDto,
     @CurrentUser() user: { id: string; role: UserRole; customerId: string },
   ) {
-    return this.ticketsService.findMine(user.id, user.customerId, filter);
+    return this.ticketsService.findMine(user.id, user.customerId, user.role, filter);
   }
 
   @Post()

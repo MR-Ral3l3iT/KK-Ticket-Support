@@ -86,6 +86,7 @@ model Customer {
   id        String    @id @default(cuid())
   name      String    /// ชื่อบริษัทลูกค้า
   code      String    @unique /// รหัสลูกค้า เช่น CUST-001
+  taxId     String?   /// เลขประจำตัวผู้เสียภาษี
   email     String?   /// อีเมลติดต่อ
   phone     String?   /// เบอร์โทรศัพท์
   address   String?   /// ที่อยู่

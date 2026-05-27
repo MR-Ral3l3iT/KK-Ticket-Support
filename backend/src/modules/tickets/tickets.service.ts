@@ -59,13 +59,19 @@ export class TicketsService {
 
   // ─── Customer Portal ─────────────────────────────────────────
 
-  async findMine(actorId: string, customerId: string, filter: TicketFilterDto) {
+  async findMine(
+    actorId: string,
+    customerId: string,
+    role: UserRole,
+    filter: TicketFilterDto,
+  ) {
     const { status, priority, search, page = 1, limit = 20 } = filter;
 
     const where: Prisma.TicketWhereInput = {
       deletedAt: null,
       customerId,
-      createdById: actorId,
+      // CUSTOMER_USER เห็นเฉพาะ ticket ที่ตัวเองเปิด | CUSTOMER_ADMIN เห็นทุก ticket ของบริษัท
+      ...(role === UserRole.CUSTOMER_USER && { createdById: actorId }),
       ...(status && { status }),
       ...(priority && { priority }),
       ...(search && {

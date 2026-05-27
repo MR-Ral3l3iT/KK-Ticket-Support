@@ -57,17 +57,20 @@ export function CustomerFormModal({ open, customer, onClose, onSuccess }: Props)
     if (!validate()) return;
     setSaving(true);
     try {
-      const payload = {
-        name: form.name.trim(), code: form.code.trim().toUpperCase(),
-        taxId: form.taxId || undefined, email: form.email || undefined,
-        phone: form.phone || undefined, address: form.address || undefined,
+      const base = {
+        name: form.name.trim(),
+        code: form.code.trim().toUpperCase(),
+        taxId: form.taxId.trim() || undefined,
+        email: form.email || undefined,
+        phone: form.phone || undefined,
+        address: form.address || undefined,
         isActive: form.isActive,
       };
       if (customer) {
-        await customersApi.update(customer.id, payload);
+        await customersApi.update(customer.id, base);
         toast.success('แก้ไขข้อมูลลูกค้าสำเร็จ');
       } else {
-        await customersApi.create(payload);
+        await customersApi.create(base);
         toast.success('เพิ่มลูกค้าสำเร็จ');
       }
       onSuccess();

@@ -9,6 +9,7 @@ const CUSTOMER_SELECT = {
   id: true,
   name: true,
   code: true,
+  taxId: true,
   email: true,
   phone: true,
   address: true,
@@ -58,6 +59,7 @@ export class CustomersService {
         id: true,
         name: true,
         code: true,
+        taxId: true,
         email: true,
         phone: true,
         address: true,
@@ -84,9 +86,11 @@ export class CustomersService {
       data: {
         name: dto.name,
         code: dto.code,
+        taxId: dto.taxId,
         email: dto.email,
         phone: dto.phone,
         address: dto.address,
+        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
       select: CUSTOMER_SELECT,
     });
